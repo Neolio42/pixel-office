@@ -88,6 +88,15 @@ export function ApprovalToast({ approval, session, onDecision }: Props) {
         )}
       </div>
 
+      {/* Task context */}
+      {session?.task && (
+        <div className="px-4 pt-2 pb-0">
+          <div className="text-[#8899aa] text-xs font-mono truncate" title={session.task}>
+            {session.task.replace(/^[\s—–\-•*]+/, '')}
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <div className="px-4 py-3">
         <div className="text-[#ccccee] text-sm font-mono font-bold mb-2">

@@ -318,7 +318,16 @@ export function OfficeCanvas() {
           </button>
         </div>
       </div>
-      <WorkerPanel sessions={sessions} />
+      <WorkerPanel
+        sessions={sessions}
+        onSelectWorker={(id) => {
+          // Dismiss canvas popup when panel selects a worker
+          if (id) {
+            setSelectedWorker(null);
+            setPopupAnchor(null);
+          }
+        }}
+      />
     </div>
   );
 }

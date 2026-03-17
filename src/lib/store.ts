@@ -25,7 +25,7 @@ function getNextDeskIndex(): number {
   return 0;
 }
 
-export function addSession(sessionId: string, cwd: string, tty = ''): Session {
+export function addSession(sessionId: string, cwd: string, tty = '', transcriptPath?: string): Session {
   const sessions = getSessions();
   const now = Date.now();
   const session: Session = {
@@ -38,6 +38,7 @@ export function addSession(sessionId: string, cwd: string, tty = ''): Session {
     startedAt: now,
     lastSeen: now,
     recentTools: [],
+    transcriptPath,
   };
   sessions.set(sessionId, session);
   return session;
@@ -84,17 +85,38 @@ export function getAllSessions(): Session[] {
   return [...getSessions().values()];
 }
 
+export function setSessionTask(sessionId: string, task: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.task = task;
+  return session;
+}
+
+export function setSessionFocus(sessionId: string, focus: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.currentFocus = focus;
+  return session;
+}
+
+export function setSessionPlanMode(sessionId: string, inPlanMode: boolean): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.inPlanMode = inPlanMode;
+  return session;
+}
+
 function getToolSummary(toolName: string, toolInput: Record<string, unknown>): string {
   switch (toolName) {
     case 'Read': {
       const p = toolInput.file_path as string | undefined;
-      return p ? `Reading ${p.split('/').slice(-2).join('/')}` : 'Reading file';
+      return p ? `Reading ${p.split('/').pop()}` : 'Reading file';
     }
     case 'Edit':
     case 'Write':
     case 'MultiEdit': {
       const p = toolInput.file_path as string | undefined;
-      return p ? `Editing ${p.split('/').slice(-2).join('/')}` : 'Editing file';
+      return p ? `Editing ${p.split('/').pop()}` : 'Editing file';
     }
     case 'Grep': {
       const pattern = toolInput.pattern as string | undefined;
@@ -124,7 +146,17 @@ function getToolSummary(toolName: string, toolInput: Record<string, unknown>): s
         if (match) {
           const server = match[1].replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
           const action = match[2].replace(/[-_]+/g, ' ');
-          return `${server}: ${action.slice(0, 40)}`;
+          // For well-known servers, shorten and use toolInput for details
+          const shortServer = server.toLowerCase();
+          // Browser tools: use the action param (screenshot, left_click, etc.)
+          if (shortServer.includes('chrome') || shortServer.includes('browser')) {
+            const act = toolInput.action as string | undefined;
+            if (act) return `Browser: ${act.replace(/_/g, ' ')}`;
+            return `Browser: ${action.replace(/_/g, ' ').slice(0, 30)}`;
+          }
+          if (shortServer.includes('clickup')) return `ClickUp: ${action.replace(/_/g, ' ').slice(0, 30)}`;
+          if (shortServer.includes('calendar')) return `Calendar: ${action.replace(/_/g, ' ').slice(0, 30)}`;
+          return `${server}: ${action.replace(/_/g, ' ').slice(0, 30)}`;
         }
       }
       // Generic: grab first string value from input

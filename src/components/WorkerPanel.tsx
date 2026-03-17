@@ -1,92 +1,164 @@
 'use client';
 
+import { useState } from 'react';
 import { Session } from '@/lib/types';
 
-const STATE_LABELS: Record<string, string> = {
-  idle: 'Idle',
-  typing: 'Typing',
-  reading: 'Reading',
-  waiting: 'Awaiting approval',
-  walking: 'Walking',
-};
-
 const STATE_COLORS: Record<string, string> = {
-  idle: '#888',
+  idle: '#444',
   typing: '#4a7cbf',
   reading: '#4abf5c',
   waiting: '#bf8b4a',
   walking: '#8b4abf',
 };
 
-const WORKER_NAMES = ['Pixel', 'Byte', 'Cache', 'Queue', 'Stack'];
-
 function formatDuration(startedAt: number): string {
   const seconds = Math.floor((Date.now() - startedAt) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
+  return `${hours}h ${minutes % 60}m`;
 }
 
-const ACTIVE_STATES = new Set(['typing', 'reading', 'walking']);
+function projectName(cwd: string): string {
+  return cwd.split('/').filter(Boolean).pop() || cwd;
+}
 
-export function WorkerPanel({ sessions }: { sessions: Session[] }) {
+interface Props {
+  sessions: Session[];
+  onSelectWorker?: (sessionId: string | null) => void;
+}
+
+export function WorkerPanel({ sessions, onSelectWorker }: Props) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [focusing, setFocusing] = useState<string | null>(null);
+
+  function handleClick(sessionId: string) {
+    const next = expandedId === sessionId ? null : sessionId;
+    setExpandedId(next);
+    onSelectWorker?.(next);
+  }
+
+  async function handleFocusTerminal(sessionId: string) {
+    setFocusing(sessionId);
+    try {
+      await fetch('/api/focus-terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+    } finally {
+      setFocusing(null);
+    }
+  }
+
   return (
-    <div className="w-72 bg-[#12122a] border-l border-[#2a2a4a] p-4 overflow-y-auto">
-      <h2 className="text-[#8888aa] text-xs font-mono uppercase tracking-widest mb-4">
-        Workers ({sessions.length})
-      </h2>
+    <div className="w-60 bg-[#0e0e1e] border-l border-[#1a1a3a] overflow-y-auto flex flex-col">
+      <div className="px-3 py-2.5 border-b border-[#1a1a3a]">
+        <span className="text-[#444] text-[10px] font-mono uppercase tracking-widest">
+          {sessions.length} active
+        </span>
+      </div>
+
       {sessions.length === 0 && (
-        <p className="text-[#555] text-sm font-mono">No active sessions</p>
+        <div className="px-3 py-6 text-center">
+          <p className="text-[#333] text-[11px] font-mono">No sessions</p>
+        </div>
       )}
-      {sessions.map((session) => {
-        const isActive = ACTIVE_STATES.has(session.state);
-        const isWaiting = session.state === 'waiting';
-        return (
-          <div
-            key={session.sessionId}
-            className="mb-3 p-3 rounded-lg bg-[#1a1a3a] border border-[#2a2a4a]"
-          >
-            <div className="flex items-center gap-2 mb-1">
-              {/* Activity indicator: pulsing when active, static when idle */}
-              <div
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
-                style={{ backgroundColor: STATE_COLORS[session.state] || '#888' }}
-              />
-              <span className="text-[#ccc] text-sm font-mono font-bold flex-1 truncate">
-                {WORKER_NAMES[session.deskIndex] || `Worker ${session.deskIndex}`}
-              </span>
-              <span className="text-[#555] text-xs font-mono flex-shrink-0">
-                {formatDuration(session.startedAt)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 ml-4">
-              <span className="text-[#777] text-xs font-mono">
-                {STATE_LABELS[session.state] || session.state}
-              </span>
-              {isWaiting && (
-                <span className="text-[#bf8b4a] text-xs font-mono bg-[#bf8b4a]/10 border border-[#bf8b4a]/30 rounded px-1.5 py-0.5 leading-none">
-                  Needs approval
-                </span>
+
+      <div className="flex-1 p-1">
+        {sessions.map((session) => {
+          const isExpanded = expandedId === session.sessionId;
+          const isIdle = session.state === 'idle';
+          const isWaiting = session.state === 'waiting';
+          const project = projectName(session.cwd);
+          const stateColor = STATE_COLORS[session.state] || '#444';
+          const focus = session.currentFocus || null;
+          const lastTool = session.recentTools[session.recentTools.length - 1];
+
+          return (
+            <div
+              key={session.sessionId}
+              className={`rounded cursor-pointer transition-all ${
+                isExpanded
+                  ? 'bg-[#161630] border border-[#2a2a5a]'
+                  : 'border border-transparent hover:bg-[#12122a]'
+              }`}
+              onClick={() => handleClick(session.sessionId)}
+            >
+              <div className="px-2 py-2">
+                {/* Project name + time */}
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${!isIdle && !isWaiting ? 'animate-pulse' : ''}`}
+                    style={{ backgroundColor: stateColor }}
+                  />
+                  <span className="text-[#99a] text-[11px] font-mono font-bold flex-1 truncate">
+                    {project}
+                  </span>
+                  <span className="text-[#2a2a3a] text-[10px] font-mono flex-shrink-0">
+                    {formatDuration(session.startedAt)}
+                  </span>
+                </div>
+
+                {/* Focus — what they're working on (from prompt heuristic) */}
+                {focus && (
+                  <div className="text-[#aab0b8] text-[11px] font-mono mt-1 ml-3 leading-relaxed">
+                    {focus}
+                  </div>
+                )}
+
+                {/* Current tool — secondary, dimmer */}
+                {lastTool && !isIdle && (
+                  <div className="text-[#3a3a5a] text-[10px] font-mono mt-0.5 ml-3 truncate">
+                    {lastTool.summary}
+                  </div>
+                )}
+
+                {!focus && isIdle && (
+                  <div className="text-[#2a2a3a] text-[11px] font-mono mt-1 ml-3">Idle</div>
+                )}
+
+                {isWaiting && (
+                  <div className="ml-3 mt-1">
+                    <span className="text-[#bf8b4a] text-[10px] font-mono bg-[#bf8b4a]/8 border border-[#bf8b4a]/15 rounded px-1.5 py-0.5 leading-none">
+                      Approval needed
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {isExpanded && (
+                <div className="px-2 pb-2 border-t border-[#1a1a3a] pt-1.5">
+                  {session.recentTools.length > 1 && (
+                    <div className="mb-1.5">
+                      {session.recentTools.slice(-4, -1).reverse().map((t, i) => (
+                        <div
+                          key={t.timestamp}
+                          className="text-[10px] font-mono leading-relaxed ml-1 truncate"
+                          style={{ color: i === 0 ? '#3a3a5a' : '#222238' }}
+                        >
+                          {t.summary}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFocusTerminal(session.sessionId);
+                    }}
+                    disabled={focusing === session.sessionId}
+                    className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[10px] font-mono rounded transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {focusing === session.sessionId ? 'Focusing…' : 'Focus Terminal'}
+                  </button>
+                </div>
               )}
             </div>
-            {session.recentTools.length > 0 && (
-              <div className="text-[#6688aa] text-xs font-mono ml-4 mt-1 truncate" title={session.recentTools[session.recentTools.length - 1].summary}>
-                {session.recentTools[session.recentTools.length - 1].summary}
-              </div>
-            )}
-            {session.recentTools.length === 0 && session.currentTool && (
-              <div className="text-[#6688aa] text-xs font-mono ml-4 mt-1">
-                {session.currentTool}
-              </div>
-            )}
-            <div className="text-[#444] text-xs font-mono ml-4 mt-1 truncate" title={session.cwd}>
-              {session.cwd.split('/').slice(-2).join('/')}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

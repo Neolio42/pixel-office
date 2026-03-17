@@ -10,6 +10,12 @@ export interface Session {
   startedAt: number;
   lastSeen: number;
   recentTools: { toolName: string; summary: string; timestamp: number }[];
+  task?: string;
+  currentFocus?: string;
+  transcriptPath?: string;
+  inPlanMode?: boolean;
+  /** Set by UserPromptSubmit, cleared after first PreToolUse reads transcript. */
+  needsFocusUpdate?: boolean;
 }
 
 export interface PendingApproval {

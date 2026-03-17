@@ -4,36 +4,18 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { Session, WSMessageToClient } from '@/lib/types';
 import { buildGrid } from '@/game/office-layout';
 import { renderOffice, initRenderer } from '@/game/renderer';
-import { WorkerEntity, createWorker, updateWorker, setWorkerState, startLeaving } from '@/game/worker-entity';
+import { WorkerEntity, createWorker, updateWorker, setWorkerState, setWorkerPlanMode, startLeaving } from '@/game/worker-entity';
 import { loadAssets, AssetBundle } from '@/game/asset-loader';
 
-/** Convert a raw tool name + optional input into a short human-readable speech bubble label. */
-function toolLabel(toolName: string, toolInput?: Record<string, unknown>): string {
-  // Bash: show a truncated version of the command
-  if (toolName === 'Bash') {
-    const cmd = String(toolInput?.command || '').trim();
-    return cmd ? (cmd.length > 20 ? cmd.slice(0, 18) + '…' : cmd) : 'Running…';
-  }
-  if (toolName === 'Read') return 'Reading file';
-  if (toolName === 'Edit' || toolName === 'Write' || toolName === 'MultiEdit') return 'Editing file';
-  if (toolName === 'Grep' || toolName === 'Glob') return 'Searching';
-  if (toolName === 'Agent') return 'Thinking…';
-
-  // MCP tools: mcp__<server>__<action>
-  const mcpMatch = toolName.match(/^mcp__([^_]+(?:_[^_]+)*)__(.+)$/);
-  if (mcpMatch) {
-    const server = mcpMatch[1].toLowerCase();
-    if (server.includes('chrome') || server.includes('browser') || server.includes('playwright')) return 'Browser';
-    if (server.includes('clickup')) return 'ClickUp';
-    // Clean up server name: replace hyphens/underscores with space, title-case
-    const cleaned = server
-      .replace(/[-_]+/g, ' ')
-      .replace(/\b\w/g, c => c.toUpperCase());
-    return cleaned.length > 15 ? cleaned.slice(0, 13) + '…' : cleaned;
-  }
-
-  // Default: cap at 15 chars
-  return toolName.length > 15 ? toolName.slice(0, 13) + '…' : toolName;
+/** Get the speech bubble text from the session's most recent tool summary. Truncates to ~25 chars at word boundary. */
+function bubbleText(session: Session): string | null {
+  const last = session.recentTools[session.recentTools.length - 1];
+  if (!last) return null;
+  const s = last.summary;
+  if (s.length <= 25) return s;
+  // Cut at last space before limit to avoid mid-word truncation
+  const cut = s.lastIndexOf(' ', 23);
+  return (cut > 10 ? s.slice(0, cut) : s.slice(0, 23)) + '…';
 }
 
 /** For approval-request bubbles, phrase it as a question like "Can I push?" */
@@ -57,7 +39,7 @@ function approvalLabel(toolName: string, toolInput: Record<string, unknown>): st
     return (cleaned.length > 12 ? cleaned.slice(0, 10) + '…' : cleaned) + '?';
   }
 
-  const label = toolLabel(toolName, toolInput);
+  const label = toolName.length > 15 ? toolName.slice(0, 13) + '…' : toolName;
   return `${label}?`;
 }
 
@@ -145,12 +127,21 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
           }
           const worker = workers.get(s.sessionId)!;
           setWorkerState(worker, s.state);
-          if (s.state === 'waiting' && s.currentTool) {
-            worker.speechBubble = toolLabel(s.currentTool);
+          // Handle plan mode
+          setWorkerPlanMode(worker, !!s.inPlanMode);
+          // Speech bubbles — focus title is hero, tool summary is fallback
+          if (s.state === 'waiting') {
+            worker.speechBubble = approvalLabel(s.currentTool || 'Unknown', {});
           } else if (s.state === 'typing' || s.state === 'reading') {
-            // Show current tool briefly, then clear
-            if (s.currentTool) {
-              worker.speechBubble = toolLabel(s.currentTool);
+            // Focus (intent) is primary, tool summary is fallback
+            const text = s.currentFocus || bubbleText(s);
+            if (text) {
+              if (text.length <= 22) {
+                worker.speechBubble = text;
+              } else {
+                const cut = text.lastIndexOf(' ', 20);
+                worker.speechBubble = (cut > 8 ? text.slice(0, cut) : text.slice(0, 20)) + '…';
+              }
             } else {
               worker.speechBubble = null;
             }

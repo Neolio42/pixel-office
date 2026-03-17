@@ -21,6 +21,7 @@ export interface WorkerEntity {
   leaving: boolean;
   arrived: boolean;       // has initially arrived at desk
   inBreakRoom: boolean;   // currently heading to or at break room
+  inMeetingRoom: boolean; // currently heading to or at meeting room (plan mode)
   // Client-side idle detection
   lastToolTime: number; // Date.now() of last active tool call
 }
@@ -34,6 +35,15 @@ const BREAK_ROOM_SPOTS = [
   { x: 17, y: 3 },  // right of coffee table
   { x: 15, y: 5 },  // bottom center
   { x: 16, y: 5 },  // bottom center-right
+];
+
+// Meeting room positions around the table (cols 14-18, rows 8-13)
+const MEETING_ROOM_SPOTS = [
+  { x: 15, y: 9 },   // above table left
+  { x: 16, y: 9 },   // above table right
+  { x: 15, y: 12 },  // below table left
+  { x: 16, y: 12 },  // below table right
+  { x: 14, y: 10 },  // left of table
 ];
 
 export function createWorker(sessionId: string, deskIndex: number): WorkerEntity {
@@ -54,6 +64,7 @@ export function createWorker(sessionId: string, deskIndex: number): WorkerEntity
     leaving: false,
     arrived: false,
     inBreakRoom: false,
+    inMeetingRoom: false,
     lastToolTime: Date.now(),
   };
 }
@@ -133,6 +144,17 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
   if (worker.leaving) return;
 
   if (worker.arrived) {
+    // In meeting room: stay there regardless of state changes (plan mode controls exit)
+    if (worker.inMeetingRoom) {
+      const animState: AnimState = state === 'walking' ? 'walking' : state;
+      if (animState !== worker.state && worker.state !== 'walking') {
+        worker.state = animState;
+        worker.frameIndex = 0;
+        worker.frameTimer = 0;
+      }
+      return;
+    }
+
     if (state === 'idle' && !worker.inBreakRoom) {
       // Go to break room — pick a spot based on desk index
       const spot = BREAK_ROOM_SPOTS[worker.deskIndex % BREAK_ROOM_SPOTS.length];
@@ -159,6 +181,26 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       worker.frameIndex = 0;
       worker.frameTimer = 0;
     }
+  }
+}
+
+export function setWorkerPlanMode(worker: WorkerEntity, inPlanMode: boolean) {
+  if (worker.leaving) return;
+  if (!worker.arrived) return;
+
+  if (inPlanMode && !worker.inMeetingRoom) {
+    // Move to meeting room
+    const spot = MEETING_ROOM_SPOTS[worker.deskIndex % MEETING_ROOM_SPOTS.length];
+    worker.targetX = spot.x;
+    worker.targetY = spot.y;
+    worker.inMeetingRoom = true;
+    worker.inBreakRoom = false;
+  } else if (!inPlanMode && worker.inMeetingRoom) {
+    // Return to desk
+    const desk = DESK_POSITIONS[worker.deskIndex] || DESK_POSITIONS[0];
+    worker.targetX = desk.chairX;
+    worker.targetY = desk.chairY;
+    worker.inMeetingRoom = false;
   }
 }
 
