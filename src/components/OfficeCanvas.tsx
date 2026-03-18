@@ -1,25 +1,47 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRecentCwds } from '@/hooks/useRecentCwds';
 import { CANVAS_W, CANVAS_H, TILE_SIZE, SCALE } from '@/game/office-layout';
 import { usePixelOffice } from '@/hooks/usePixelOffice';
 import { WorkerPanel } from './WorkerPanel';
 import { ApprovalToast } from './ApprovalToast';
 import { WorkerPopup } from './WorkerPopup';
+import { TerminalTile, EmptyTile } from './TerminalTile';
 
-const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
-let demoCounter = 0;
-let addWorkerCounter = 0;
+/** Max terminals visible in the grid at once */
+const MAX_TILES = 3;
 
 export function OfficeCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { sessions, approvals, sendApproval, assetsLoaded, selectedWorker, setSelectedWorker, workersRef } = usePixelOffice(canvasRef);
-  const [demoRunning, setDemoRunning] = useState(false);
-  // Popup anchor in viewport pixels
+  const {
+    sessions, approvals, sendApproval, assetsLoaded,
+    selectedWorker, setSelectedWorker, workersRef,
+    wsRef, ptyTabs, setPtyTabs, spawnSession, spawnError, terminalHandlersRef, onSpawnSuccessRef,
+  } = usePixelOffice(canvasRef);
   const [popupAnchor, setPopupAnchor] = useState<{ x: number; y: number } | null>(null);
-  // Viewport size for clamping popup
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
+
+  // Which ptyIds are pinned to visible tiles (up to MAX_TILES)
+  const [visiblePtyIds, setVisiblePtyIds] = useState<string[]>([]);
+
+  // Sync visible tiles when tabs change
+  useEffect(() => {
+    setVisiblePtyIds(prev => {
+      // Remove any that no longer exist
+      const filtered = prev.filter(id => ptyTabs.some(t => t.ptyId === id));
+      // Auto-add new tabs if there's room
+      for (const tab of ptyTabs) {
+        if (filtered.length >= MAX_TILES) break;
+        if (!filtered.includes(tab.ptyId)) {
+          filtered.push(tab.ptyId);
+        }
+      }
+      // Only update if changed
+      if (filtered.length === prev.length && filtered.every((id, i) => prev[i] === id)) return prev;
+      return filtered;
+    });
+  }, [ptyTabs]);
 
   useEffect(() => {
     const update = () => setViewportSize({ w: window.innerWidth, h: window.innerHeight });
@@ -28,16 +50,79 @@ export function OfficeCanvas() {
     return () => window.removeEventListener('resize', update);
   }, []);
 
+  const openTerminal = useCallback((ptyId: string) => {
+    setVisiblePtyIds(prev => {
+      if (prev.includes(ptyId)) return prev; // already visible
+      if (prev.length < MAX_TILES) return [...prev, ptyId];
+      // Replace the last tile
+      return [...prev.slice(0, -1), ptyId];
+    });
+  }, []);
+
+  const closeTerminalTile = useCallback((ptyId: string) => {
+    setVisiblePtyIds(prev => prev.filter(id => id !== ptyId));
+  }, []);
+
+  const { saveRecent } = useRecentCwds();
+  const pendingSpawnCwdRef = useRef<string | null>(null);
+
+  const handleSpawn = useCallback((cwd: string) => {
+    pendingSpawnCwdRef.current = cwd;
+    spawnSession(cwd);
+  }, [spawnSession]);
+
+  // Save to recents only on successful spawn
+  useEffect(() => {
+    onSpawnSuccessRef.current = () => {
+      if (pendingSpawnCwdRef.current) {
+        saveRecent(pendingSpawnCwdRef.current);
+        pendingSpawnCwdRef.current = null;
+      }
+    };
+  }, [saveRecent, onSpawnSuccessRef]);
+
+  // Drag-to-swap tile reordering
+  const dragSourceRef = useRef<string | null>(null);
+
+  const handleTileDragStart = useCallback((ptyId: string) => {
+    dragSourceRef.current = ptyId;
+  }, []);
+
+  const handleTileDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const handleTileDrop = useCallback((targetPtyId: string) => {
+    const sourcePtyId = dragSourceRef.current;
+    if (!sourcePtyId || sourcePtyId === targetPtyId) return;
+    setVisiblePtyIds(prev => {
+      const sourceIdx = prev.indexOf(sourcePtyId);
+      const targetIdx = prev.indexOf(targetPtyId);
+      if (targetIdx < 0) return prev;
+      // Source is from panel (not visible) — replace target
+      if (sourceIdx < 0) {
+        const next = [...prev];
+        next[targetIdx] = sourcePtyId;
+        return next;
+      }
+      // Both visible — swap
+      const next = [...prev];
+      next[sourceIdx] = targetPtyId;
+      next[targetIdx] = sourcePtyId;
+      return next;
+    });
+    dragSourceRef.current = null;
+  }, []);
+
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Canvas logical size vs displayed size (object-contain scaling)
     const rect = canvas.getBoundingClientRect();
     const displayW = rect.width;
     const displayH = rect.height;
 
-    // object-contain: canvas may have letter-boxing; compute actual rendered area
     const scaleX = displayW / CANVAS_W;
     const scaleY = displayH / CANVAS_H;
     const fitScale = Math.min(scaleX, scaleY);
@@ -47,17 +132,14 @@ export function OfficeCanvas() {
     const offsetX = (displayW - renderedW) / 2;
     const offsetY = (displayH - renderedH) / 2;
 
-    // Click position relative to the rendered canvas area
     const clickX = e.clientX - rect.left - offsetX;
     const clickY = e.clientY - rect.top - offsetY;
 
-    // Convert to logical canvas pixels, then to tile coords
     const logicalX = clickX / fitScale;
     const logicalY = clickY / fitScale;
     const tileX = logicalX / (TILE_SIZE * SCALE);
     const tileY = logicalY / (TILE_SIZE * SCALE);
 
-    // Find nearest worker within 1.5 tiles
     const CLICK_RADIUS = 1.5;
     let closest: string | null = null;
     let closestDist = CLICK_RADIUS;
@@ -72,7 +154,6 @@ export function OfficeCanvas() {
 
     if (closest) {
       setSelectedWorker(closest);
-      // Compute viewport anchor from worker's logical canvas position
       const worker = workersRef.current.get(closest)!;
       const workerLogicalX = worker.x * TILE_SIZE * SCALE;
       const workerLogicalY = worker.y * TILE_SIZE * SCALE;
@@ -83,20 +164,17 @@ export function OfficeCanvas() {
       setSelectedWorker(null);
       setPopupAnchor(null);
     }
-  }, [workersRef, setSelectedWorker]);
+  }, [workersRef, setSelectedWorker, sessions]);
 
   const handleDismissPopup = useCallback(() => {
     setSelectedWorker(null);
     setPopupAnchor(null);
   }, [setSelectedWorker]);
 
-  // Keep a ref to approvals so the demo async function can read the latest value
-  const approvalsRef = useRef(approvals);
-  useEffect(() => {
-    approvalsRef.current = approvals;
-  }, [approvals]);
-
   // ⌘Y keyboard shortcut — approve the oldest pending approval
+  const approvalsRef = useRef(approvals);
+  useEffect(() => { approvalsRef.current = approvals; }, [approvals]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
@@ -109,224 +187,123 @@ export function OfficeCanvas() {
     return () => window.removeEventListener('keydown', handler);
   }, [sendApproval]);
 
-  // Track previous approvals to detect when one disappears (i.e. was resolved)
-  const prevApprovalsRef = useRef(approvals);
-  const approvalResolvedWaitersRef = useRef<Map<string, () => void>>(new Map());
+  // Build the grid tiles: office + terminals + empty slots
+  const visibleTabs = visiblePtyIds
+    .map(id => ptyTabs.find(t => t.ptyId === id))
+    .filter((t): t is NonNullable<typeof t> => !!t);
 
-  useEffect(() => {
-    const prev = prevApprovalsRef.current;
-    const curr = approvals;
+  const terminalCount = visibleTabs.length;
+  const showEmptyTile = terminalCount < MAX_TILES;
 
-    // Find approvals that were present before but are gone now
-    for (const prevApproval of prev) {
-      const stillPresent = curr.some(a => a.id === prevApproval.id);
-      if (!stillPresent) {
-        const waiter = approvalResolvedWaitersRef.current.get(prevApproval.sessionId);
-        if (waiter) {
-          approvalResolvedWaitersRef.current.delete(prevApproval.sessionId);
-          waiter();
-        }
-      }
-    }
-
-    prevApprovalsRef.current = curr;
-  }, [approvals]);
-
-  const waitForApprovalResolved = useCallback((sessionId: string): Promise<void> => {
-    return new Promise(resolve => {
-      // Check if there's already an approval for this session right now
-      const existing = approvalsRef.current.find(a => a.sessionId === sessionId);
-      if (!existing) {
-        // No approval pending — resolve immediately (already resolved or never appeared)
-        resolve();
-        return;
-      }
-      approvalResolvedWaitersRef.current.set(sessionId, resolve);
-    });
-  }, []);
-
-  const waitForApprovalToAppear = useCallback((sessionId: string): Promise<void> => {
-    return new Promise(resolve => {
-      const existing = approvalsRef.current.find(a => a.sessionId === sessionId);
-      if (existing) {
-        resolve();
-        return;
-      }
-      // Poll via a short interval — WS delivery is near-instant
-      const interval = setInterval(() => {
-        if (approvalsRef.current.find(a => a.sessionId === sessionId)) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 100);
-    });
-  }, []);
-
-  const runDemo = useCallback(async () => {
-    setDemoRunning(true);
-    demoCounter += 1;
-    const sessionId = `demo-session-${demoCounter}-${Date.now()}`;
-    const cwd = `/home/claude/projects/demo-${demoCounter}`;
-
-    try {
-      // 1. Session start
-      await fetch('/api/hooks/session-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, cwd }),
-      });
-
-      // 2. Wait 4s for worker to finish walking to desk before sending tool calls
-      await delay(4000);
-
-      // 3. Read tool — reading animation (2s)
-      await fetch('/api/hooks/pre-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, tool_name: 'Read', tool_input: { file_path: `${cwd}/src/index.ts` } }),
-      });
-
-      // 4. After 2s: post-tool-use -> idle (500ms)
-      await delay(2000);
-      await fetch('/api/hooks/post-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-
-      // 5. After 500ms idle: Edit tool — typing animation (2s)
-      await delay(500);
-      await fetch('/api/hooks/pre-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, tool_name: 'Edit', tool_input: { file_path: `${cwd}/src/index.ts` } }),
-      });
-
-      // 6. After 2s: post-tool-use -> idle (500ms)
-      await delay(2000);
-      await fetch('/api/hooks/post-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-
-      // 7. After 500ms idle: Bash git push — blocks server-side until approved, so don't await
-      await delay(500);
-      const bashPromise = fetch('/api/hooks/pre-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          tool_name: 'Bash',
-          tool_input: { command: 'git push origin main' },
-        }),
-      });
-
-      // 8. Wait for approval toast to appear, then wait for user to approve/deny
-      await waitForApprovalToAppear(sessionId);
-      await waitForApprovalResolved(sessionId);
-
-      // Drain the blocking fetch (decision already made server-side)
-      await bashPromise;
-
-      // 9. Post-tool-use after approval
-      await fetch('/api/hooks/post-tool-use', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-
-      // 10. After 1s idle: session end — worker walks away
-      await delay(1000);
-      await fetch('/api/hooks/session-end', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-    } finally {
-      setDemoRunning(false);
-    }
-  }, [waitForApprovalToAppear, waitForApprovalResolved]);
-
-  const addWorker = useCallback(async () => {
-    addWorkerCounter += 1;
-    const sessionId = `worker-${addWorkerCounter}-${Date.now()}`;
-    const cwd = `/home/claude/projects/worker-${addWorkerCounter}`;
-    await fetch('/api/hooks/session-start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, cwd }),
-    });
-  }, []);
+  // Grid layout: 2x2 with office always top-left
+  // 0 terminals: office fills the whole area
+  // 1 terminal: office left, terminal right
+  // 2 terminals: office top-left, term1 top-right, term2 bottom spanning full
+  // 3 terminals: office top-left, term1 top-right, term2 bottom-left, term3 bottom-right
+  const totalTiles = terminalCount + (showEmptyTile ? 1 : 0);
 
   return (
-    <div className="flex h-screen w-screen bg-[#1a1a2e] overflow-hidden">
-      <div className="flex-1 flex items-center justify-center relative">
-        {!assetsLoaded && (
-          <div className="absolute inset-0 flex items-center justify-center z-20">
-            <span className="text-[#8888aa] font-mono text-sm animate-pulse">Loading assets…</span>
+    <div className="flex h-screen w-screen bg-[#08080f] overflow-hidden">
+      {/* Main grid area */}
+      <div className={`flex-1 grid gap-[1px] p-[1px] min-w-0 ${
+        totalTiles === 0
+          ? 'grid-cols-1 grid-rows-1'
+          : totalTiles <= 1
+            ? 'grid-cols-2 grid-rows-1'
+            : 'grid-cols-2 grid-rows-2'
+      }`}>
+        {/* Office tile — always present */}
+        <div className={`relative flex items-center justify-center bg-[#0e0e1e] rounded overflow-hidden ${
+          totalTiles >= 3 ? '' : totalTiles === 2 ? '' : totalTiles === 0 ? 'col-span-2 row-span-2' : ''
+        }`}>
+          {!assetsLoaded && (
+            <div className="absolute inset-0 flex items-center justify-center z-20">
+              <span className="text-[#8888aa] font-mono text-sm animate-pulse">Loading assets…</span>
+            </div>
+          )}
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_W}
+            height={CANVAS_H}
+            className="max-w-full max-h-full object-contain cursor-pointer"
+            style={{ imageRendering: 'pixelated', opacity: assetsLoaded ? 1 : 0 }}
+            onClick={handleCanvasClick}
+          />
+          {/* Approval toasts */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-30">
+            {approvals.map(approval => (
+              <ApprovalToast
+                key={approval.id}
+                approval={approval}
+                session={sessions.find(s => s.sessionId === approval.sessionId)}
+                onDecision={sendApproval}
+              />
+            ))}
           </div>
+          {/* Worker popup */}
+          {selectedWorker && popupAnchor && (() => {
+            const session = sessions.find(s => s.sessionId === selectedWorker);
+            if (!session) return null;
+            return (
+              <WorkerPopup
+                session={session}
+                anchorX={popupAnchor.x}
+                anchorY={popupAnchor.y}
+                viewportW={viewportSize.w}
+                viewportH={viewportSize.h}
+                onDismiss={handleDismissPopup}
+                onOpenTerminal={session.ptyId ? () => openTerminal(session.ptyId!) : undefined}
+              />
+            );
+          })()}
+        </div>
+
+        {/* Terminal tiles */}
+        {visibleTabs.map((tab) => (
+          <TerminalTile
+            key={tab.ptyId}
+            tab={tab}
+            session={sessions.find(s => s.ptyId === tab.ptyId)}
+            wsRef={wsRef}
+            terminalHandlers={terminalHandlersRef}
+            onClose={() => closeTerminalTile(tab.ptyId)}
+            onSpawnHere={handleSpawn}
+            onDragStart={() => handleTileDragStart(tab.ptyId)}
+            onDragOver={handleTileDragOver}
+            onDrop={() => handleTileDrop(tab.ptyId)}
+          />
+        ))}
+
+        {/* Empty tile for spawning */}
+        {showEmptyTile && totalTiles > 0 && (
+          <EmptyTile
+            onSpawn={handleSpawn}
+            spawnError={spawnError}
+            onDropPty={(ptyId) => {
+              setVisiblePtyIds(prev => {
+                if (prev.includes(ptyId)) return prev;
+                if (prev.length >= MAX_TILES) return prev;
+                return [...prev, ptyId];
+              });
+            }}
+          />
         )}
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_W}
-          height={CANVAS_H}
-          className="border border-[#2a2a4a] max-w-full max-h-full object-contain cursor-pointer"
-          style={{ imageRendering: 'pixelated', opacity: assetsLoaded ? 1 : 0 }}
-          onClick={handleCanvasClick}
-        />
-        {/* Approval toasts overlay */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex flex-col gap-3 z-30">
-          {approvals.map(approval => (
-            <ApprovalToast
-              key={approval.id}
-              approval={approval}
-              session={sessions.find(s => s.sessionId === approval.sessionId)}
-              onDecision={sendApproval}
-            />
-          ))}
-        </div>
-        {/* Worker detail popup */}
-        {selectedWorker && popupAnchor && (() => {
-          const session = sessions.find(s => s.sessionId === selectedWorker);
-          if (!session) return null;
-          return (
-            <WorkerPopup
-              session={session}
-              anchorX={popupAnchor.x}
-              anchorY={popupAnchor.y}
-              viewportW={viewportSize.w}
-              viewportH={viewportSize.h}
-              onDismiss={handleDismissPopup}
-            />
-          );
-        })()}
-        {/* Demo controls — bottom-left */}
-        <div className="absolute bottom-4 left-4 flex gap-2 z-10">
-          <button
-            onClick={runDemo}
-            disabled={demoRunning}
-            className="px-3 py-1.5 bg-[#12122a] hover:bg-[#1a1a3a] disabled:opacity-40 disabled:cursor-not-allowed border border-[#2a2a4a] text-[#8888aa] hover:text-[#aaaacc] text-xs font-mono rounded transition-colors cursor-pointer"
-          >
-            {demoRunning ? 'Running...' : 'Demo'}
-          </button>
-          <button
-            onClick={addWorker}
-            className="px-3 py-1.5 bg-[#12122a] hover:bg-[#1a1a3a] border border-[#2a2a4a] text-[#8888aa] hover:text-[#aaaacc] text-xs font-mono rounded transition-colors cursor-pointer"
-          >
-            + Add Worker
-          </button>
-        </div>
       </div>
+
+      {/* Right panel — sessions */}
       <WorkerPanel
         sessions={sessions}
+        visiblePtyIds={visiblePtyIds}
         onSelectWorker={(id) => {
-          // Dismiss canvas popup when panel selects a worker
           if (id) {
             setSelectedWorker(null);
             setPopupAnchor(null);
           }
         }}
+        onOpenTerminal={openTerminal}
+        onSpawn={handleSpawn}
+        spawnError={spawnError}
+        onDragSessionStart={handleTileDragStart}
       />
     </div>
   );

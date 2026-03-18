@@ -50,6 +50,13 @@ export interface ApprovalRequest {
   toolInput: Record<string, unknown>;
 }
 
+export interface PtyTab {
+  ptyId: string;
+  cwd: string;
+  exited: boolean;
+  exitCode?: number;
+}
+
 export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | null>) {
   const wsRef = useRef<WebSocket | null>(null);
   const workersRef = useRef<Map<string, WorkerEntity>>(new Map());
@@ -61,6 +68,12 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
+  const [ptyTabs, setPtyTabs] = useState<PtyTab[]>([]);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
+  /** Map of ptyId → data handler, so multiple terminals can receive data simultaneously */
+  const terminalHandlersRef = useRef<Map<string, (msg: WSMessageToClient) => void>>(new Map());
+  /** Called on successful spawn — used by UI to save recents only on success */
+  const onSpawnSuccessRef = useRef<((ptyId: string) => void) | null>(null);
 
   const sendApproval = useCallback((approvalId: string, decision: 'allow' | 'deny') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -72,6 +85,31 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     }
     setApprovals(prev => prev.filter(a => a.id !== approvalId));
   }, []);
+
+  const spawnSession = useCallback((cwd: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'spawn-session',
+        cwd,
+      }));
+    }
+  }, []);
+
+  /** Sync ptyTabs with session data — create tab if missing, update cwd if changed */
+  const syncPtyTabRef = useRef((session: Session) => {
+    if (!session.ptyId) return;
+    setPtyTabs(prev => {
+      const idx = prev.findIndex(t => t.ptyId === session.ptyId);
+      if (idx < 0) {
+        // Session has a ptyId but no tab — create one (e.g., after page reload)
+        return [...prev, { ptyId: session.ptyId!, cwd: session.cwd, exited: false }];
+      }
+      if (prev[idx].cwd === session.cwd) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], cwd: session.cwd };
+      return next;
+    });
+  });
 
   // Load assets on mount
   useEffect(() => {
@@ -90,9 +128,14 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     wsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      const msg: WSMessageToClient = JSON.parse(event.data);
-
+    const handleMessage = (event: MessageEvent) => {
+      let msg: WSMessageToClient;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (err) {
+        console.error('[WS] Failed to parse message:', err);
+        return;
+      }
       switch (msg.type) {
         case 'sessions': {
           setSessions(msg.sessions);
@@ -101,6 +144,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             if (!workers.has(s.sessionId)) {
               workers.set(s.sessionId, createWorker(s.sessionId, s.deskIndex));
             }
+            syncPtyTabRef.current(s);
           }
           const sessionIds = new Set(msg.sessions.map(s => s.sessionId));
           for (const [id, worker] of workers) {
@@ -113,6 +157,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
         case 'session-update': {
           const workers = workersRef.current;
           const s = msg.session;
+          syncPtyTabRef.current(s);
           setSessions(prev => {
             const idx = prev.findIndex(p => p.sessionId === s.sessionId);
             if (idx >= 0) {
@@ -170,13 +215,44 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
           console.log(`[Notification] ${msg.sessionId}: ${msg.message}`);
           break;
         }
+        case 'spawn-result': {
+          if (msg.success && msg.ptyId) {
+            setPtyTabs(prev => prev.some(t => t.ptyId === msg.ptyId) ? prev : [...prev, { ptyId: msg.ptyId, cwd: '', exited: false }]);
+            setSpawnError(null);
+            onSpawnSuccessRef.current?.(msg.ptyId);
+          } else {
+            const errMsg = msg.error || 'Spawn failed';
+            setSpawnError(errMsg);
+          }
+          break;
+        }
+        case 'terminal-exited': {
+          terminalHandlersRef.current.get(msg.ptyId)?.(msg);
+          // Remove the tab — ghost tabs (exitCode -1) immediately, normal exits after 2s
+          const delay = msg.exitCode === -1 ? 0 : 2000;
+          setTimeout(() => {
+            setPtyTabs(prev => prev.filter(t => t.ptyId !== msg.ptyId));
+          }, delay);
+          break;
+        }
+        case 'terminal-output':
+        case 'terminal-scrollback': {
+          // Forward to the specific terminal's handler
+          const handler = terminalHandlersRef.current.get(msg.ptyId);
+          handler?.(msg);
+          break;
+        }
       }
     };
 
+    ws.addEventListener('message', handleMessage);
     ws.onclose = () => console.log('[WS] Disconnected');
     ws.onerror = (err) => console.error('[WS] Error:', err);
 
-    return () => { ws.close(); };
+    return () => {
+      ws.removeEventListener('message', handleMessage);
+      ws.close();
+    };
   }, []);
 
   // Game loop — starts only after assets are loaded
@@ -213,5 +289,20 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     return () => { cancelAnimationFrame(animFrameRef.current); };
   }, [assetsLoaded, canvasRef]);
 
-  return { sessions, approvals, sendApproval, assetsLoaded, selectedWorker, setSelectedWorker, workersRef };
+  return {
+    sessions,
+    approvals,
+    sendApproval,
+    assetsLoaded,
+    selectedWorker,
+    setSelectedWorker,
+    workersRef,
+    wsRef,
+    ptyTabs,
+    setPtyTabs,
+    spawnSession,
+    spawnError,
+    terminalHandlersRef,
+    onSpawnSuccessRef,
+  };
 }

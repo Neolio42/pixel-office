@@ -1,7 +1,8 @@
 import { createServer } from 'http';
 import next from 'next';
 import { initWSS, broadcast } from './src/lib/ws-server';
-import { cleanupStaleSessions } from './src/lib/store';
+import { cleanupStaleSessions, getAllSessions } from './src/lib/store';
+import { getAllPtyEntries, killPty } from './src/lib/pty-manager';
 
 // Use globalThis to avoid duplicate intervals across module re-evaluations.
 declare global {
@@ -27,10 +28,23 @@ app.prepare().then(() => {
   // sessions that never sent SessionEnd. 30 min timeout, checks every 5 min.
   if (!globalThis.__staleSessionCleanup) {
     globalThis.__staleSessionCleanup = setInterval(() => {
+      const staleSessions = getAllSessions().filter(s => s.lastSeen < Date.now() - 30 * 60_000);
+      const stalePtyIds = new Map(staleSessions.filter(s => s.ptyId).map(s => [s.sessionId, s.ptyId!]));
       const removed = cleanupStaleSessions(30 * 60_000);
       for (const sessionId of removed) {
         console.log(`[cleanup] Removed stale session (no activity for 30min): ${sessionId}`);
         broadcast({ type: 'session-remove', sessionId });
+        const ptyId = stalePtyIds.get(sessionId);
+        if (ptyId) killPty(ptyId);
+      }
+
+      // Clean up orphaned PTYs — PTYs with no active session
+      const activePtyIds = new Set(getAllSessions().filter(s => s.ptyId).map(s => s.ptyId!));
+      for (const entry of getAllPtyEntries()) {
+        if (!activePtyIds.has(entry.ptyId)) {
+          killPty(entry.ptyId);
+          console.log(`[cleanup] Removed orphaned PTY: ${entry.ptyId}`);
+        }
       }
     }, 5 * 60_000);
   }

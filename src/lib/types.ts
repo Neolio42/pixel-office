@@ -16,6 +16,8 @@ export interface Session {
   inPlanMode?: boolean;
   /** Set by UserPromptSubmit, cleared after first PreToolUse reads transcript. */
   needsFocusUpdate?: boolean;
+  /** Present if this session was spawned by Pixel Office's embedded terminal. */
+  ptyId?: string;
 }
 
 export interface PendingApproval {
@@ -33,10 +35,19 @@ export type WSMessageToClient =
   | { type: 'session-remove'; sessionId: string }
   | { type: 'approval-request'; approval: { id: string; sessionId: string; toolName: string; toolInput: Record<string, unknown> } }
   | { type: 'approval-resolved'; approvalId: string }
-  | { type: 'notification'; sessionId: string; message: string };
+  | { type: 'notification'; sessionId: string; message: string }
+  | { type: 'terminal-output'; ptyId: string; data: string }
+  | { type: 'terminal-scrollback'; ptyId: string; data: string }
+  | { type: 'terminal-exited'; ptyId: string; exitCode: number }
+  | { type: 'spawn-result'; ptyId: string; success: boolean; error?: string };
 
 export type WSMessageFromClient =
-  | { type: 'approval-response'; approvalId: string; decision: 'allow' | 'deny' };
+  | { type: 'approval-response'; approvalId: string; decision: 'allow' | 'deny' }
+  | { type: 'terminal-input'; ptyId: string; data: string }
+  | { type: 'terminal-resize'; ptyId: string; cols: number; rows: number }
+  | { type: 'terminal-subscribe'; ptyId: string; cols?: number; rows?: number }
+  | { type: 'terminal-unsubscribe'; ptyId: string }
+  | { type: 'spawn-session'; cwd: string; prompt?: string };
 
 export interface HookPayload {
   session_id: string;

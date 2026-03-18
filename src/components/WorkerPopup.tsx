@@ -18,9 +18,10 @@ interface Props {
   viewportW: number;
   viewportH: number;
   onDismiss: () => void;
+  onOpenTerminal?: () => void;
 }
 
-export function WorkerPopup({ session, anchorX, anchorY, viewportW, viewportH, onDismiss }: Props) {
+export function WorkerPopup({ session, anchorX, anchorY, viewportW, viewportH, onDismiss, onOpenTerminal }: Props) {
   const [focusing, setFocusing] = useState(false);
 
   async function handleFocusTerminal() {
@@ -93,13 +94,22 @@ export function WorkerPopup({ session, anchorX, anchorY, viewportW, viewportH, o
           </div>
         )}
 
-        <button
-          onClick={handleFocusTerminal}
-          disabled={focusing}
-          className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[10px] font-mono rounded transition-colors cursor-pointer disabled:opacity-50"
-        >
-          {focusing ? 'Focusing…' : 'Focus Terminal'}
-        </button>
+        {onOpenTerminal ? (
+          <button
+            onClick={() => { onOpenTerminal(); onDismiss(); }}
+            className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[10px] font-mono rounded transition-colors cursor-pointer"
+          >
+            Open Terminal
+          </button>
+        ) : (
+          <button
+            onClick={handleFocusTerminal}
+            disabled={focusing}
+            className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[10px] font-mono rounded transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {focusing ? 'Focusing…' : 'Focus Terminal'}
+          </button>
+        )}
       </div>
     </div>
   );
