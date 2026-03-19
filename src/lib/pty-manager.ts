@@ -199,19 +199,28 @@ export function linkSessionToPty(sessionId: string, ptyId: string): boolean {
   return true;
 }
 
+/** Normalize tty path to canonical form /dev/ttysNNN */
+function normalizeTty(tty: string): string {
+  if (!tty) return '';
+  // Already canonical: /dev/ttys008
+  if (tty.startsWith('/dev/tty')) return tty;
+  // Just the device name: ttys008
+  if (tty.startsWith('tty')) return `/dev/${tty}`;
+  // Short form: s008
+  if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
+  // Partial: /dev/s008
+  if (tty.startsWith('/dev/')) return tty;
+  return tty;
+}
+
 export function findPtyByTty(ttyPath: string): PtyEntry | undefined {
   if (!ttyPath) return undefined;
-  for (const entry of getRegistry().values()) {
-    if (!entry.sessionId && entry.ttyPath && entry.ttyPath === ttyPath) {
-      return entry;
-    }
-  }
-  // Also try matching just the suffix (e.g., "s012" matches "/dev/ttys012")
-  const suffix = ttyPath.replace(/^\/dev\/tty/, '');
+  const normalized = normalizeTty(ttyPath);
   for (const entry of getRegistry().values()) {
     if (!entry.sessionId && entry.ttyPath) {
-      const entrySuffix = entry.ttyPath.replace(/^\/dev\/tty/, '');
-      if (entrySuffix === suffix) return entry;
+      if (entry.ttyPath === normalized || normalizeTty(entry.ttyPath) === normalized) {
+        return entry;
+      }
     }
   }
   return undefined;

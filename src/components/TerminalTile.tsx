@@ -39,6 +39,9 @@ export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, o
   const name = projectName(tab.cwd);
   const color = stateColor(session, tab.exited);
   const isActive = session && !tab.exited && session.state !== 'idle';
+  const focus = session?.currentFocus || null;
+  const lastTool = session?.recentTools?.[session.recentTools.length - 1];
+  const subtitle = focus || (lastTool && session?.state !== 'idle' ? lastTool.summary : null);
 
   return (
     <div
@@ -48,26 +51,36 @@ export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, o
     >
       {/* Title bar — draggable for reordering */}
       <div
-        className="flex items-center h-7 px-2 bg-[#0a0a18] border-b border-[#1a1a3a] flex-shrink-0 group cursor-grab active:cursor-grabbing"
+        className="flex flex-col border-b border-[#1a1a3a] flex-shrink-0 group cursor-grab active:cursor-grabbing"
         draggable
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = 'move';
           onDragStart?.();
         }}
       >
-        <div
-          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mr-1.5 ${isActive ? 'animate-pulse' : ''}`}
-          style={{ backgroundColor: color }}
-        />
-        <span className="text-[#888] text-[11px] font-mono flex-1 truncate">
-          {tab.exited ? `${name} (exited)` : name}
-        </span>
-        <button
-          className="text-[#222] hover:text-[#888] text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-          onClick={onClose}
-        >
-          ✕
-        </button>
+        <div className="flex items-center h-7 px-2">
+          <div
+            className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mr-1.5 ${isActive ? 'animate-pulse' : ''}`}
+            style={{ backgroundColor: color }}
+          />
+          <span className="text-[#888] text-[11px] font-mono flex-1 truncate">
+            {tab.exited ? `${name} (exited)` : name}
+          </span>
+          {session?.state === 'waiting' && (
+            <span className="text-[#bf8b4a] text-[9px] font-mono mr-2">Approval</span>
+          )}
+          <button
+            className="text-[#222] hover:text-[#888] text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+        {subtitle && (
+          <div className="px-2 pb-1 text-[#3a3a5a] text-[10px] font-mono truncate">
+            {subtitle}
+          </div>
+        )}
       </div>
 
       {/* Terminal */}
