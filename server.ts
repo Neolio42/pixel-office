@@ -28,14 +28,11 @@ app.prepare().then(() => {
   // sessions that never sent SessionEnd. 30 min timeout, checks every 5 min.
   if (!globalThis.__staleSessionCleanup) {
     globalThis.__staleSessionCleanup = setInterval(() => {
-      const staleSessions = getAllSessions().filter(s => s.lastSeen < Date.now() - 30 * 60_000);
-      const stalePtyIds = new Map(staleSessions.filter(s => s.ptyId).map(s => [s.sessionId, s.ptyId!]));
-      const removed = cleanupStaleSessions(30 * 60_000);
+      const isAlivePty = (ptyId: string) => { const e = getAllPtyEntries().find(p => p.ptyId === ptyId); return !!e && !e.exited; };
+      const removed = cleanupStaleSessions(30 * 60_000, isAlivePty);
       for (const sessionId of removed) {
-        console.log(`[cleanup] Removed stale session (no activity for 30min): ${sessionId}`);
+        console.log(`[cleanup] Removed stale session: ${sessionId}`);
         broadcast({ type: 'session-remove', sessionId });
-        const ptyId = stalePtyIds.get(sessionId);
-        if (ptyId) killPty(ptyId);
       }
 
       // Clean up orphaned PTYs — exited PTYs with no active session

@@ -80,9 +80,7 @@ export function initWSS(server: Server) {
       }
       return s;
     });
-    if (sessions.length > 0) {
-      ws.send(JSON.stringify({ type: 'sessions', sessions }));
-    }
+    ws.send(JSON.stringify({ type: 'sessions', sessions }));
 
     ws.on('message', (raw) => {
       try {

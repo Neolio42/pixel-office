@@ -60,12 +60,14 @@ export function updateSession(sessionId: string, state: WorkerState, tool: strin
   return session;
 }
 
-export function cleanupStaleSessions(maxAgeMs = 60_000): string[] {
+export function cleanupStaleSessions(maxAgeMs = 60_000, isAlivePtyId?: (ptyId: string) => boolean): string[] {
   const sessions = getSessions();
   const cutoff = Date.now() - maxAgeMs;
   const removed: string[] = [];
   for (const [id, session] of sessions) {
     if (session.lastSeen < cutoff) {
+      // Don't remove sessions with a live embedded PTY — the terminal is still open
+      if (session.ptyId && isAlivePtyId?.(session.ptyId)) continue;
       sessions.delete(id);
       removed.push(id);
     }

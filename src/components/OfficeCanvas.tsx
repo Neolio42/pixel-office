@@ -28,7 +28,7 @@ export function OfficeCanvas() {
   // Sync visible tiles when tabs change
   useEffect(() => {
     setVisiblePtyIds(prev => {
-      // Remove any that no longer exist
+      // Remove any that no longer exist in ptyTabs
       const filtered = prev.filter(id => ptyTabs.some(t => t.ptyId === id));
       // Auto-add new tabs if there's room
       for (const tab of ptyTabs) {
@@ -37,7 +37,6 @@ export function OfficeCanvas() {
           filtered.push(tab.ptyId);
         }
       }
-      // Only update if changed
       if (filtered.length === prev.length && filtered.every((id, i) => prev[i] === id)) return prev;
       return filtered;
     });
@@ -51,17 +50,19 @@ export function OfficeCanvas() {
   }, []);
 
   const openTerminal = useCallback((ptyId: string) => {
+    // Ensure tab exists in ptyTabs (may have been removed on close)
+    setPtyTabs(prev => prev.some(t => t.ptyId === ptyId) ? prev : [...prev, { ptyId, cwd: '', exited: false }]);
     setVisiblePtyIds(prev => {
-      if (prev.includes(ptyId)) return prev; // already visible
+      if (prev.includes(ptyId)) return prev;
       if (prev.length < MAX_TILES) return [...prev, ptyId];
-      // Replace the last tile
       return [...prev.slice(0, -1), ptyId];
     });
-  }, []);
+  }, [setPtyTabs]);
 
   const closeTerminalTile = useCallback((ptyId: string) => {
+    setPtyTabs(prev => prev.filter(t => t.ptyId !== ptyId));
     setVisiblePtyIds(prev => prev.filter(id => id !== ptyId));
-  }, []);
+  }, [setPtyTabs]);
 
   const { saveRecent } = useRecentCwds();
   const pendingSpawnCwdRef = useRef<string | null>(null);

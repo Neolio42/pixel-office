@@ -208,7 +208,8 @@ function normalizeTty(tty: string): string {
   if (tty.startsWith('tty')) return `/dev/${tty}`;
   // Short form: s008
   if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
-  // Partial: /dev/s008
+  // /dev/sNNN → /dev/ttysNNN
+  if (/^\/dev\/s\d+$/.test(tty)) return `/dev/tty${tty.slice(5)}`;
   if (tty.startsWith('/dev/')) return tty;
   return tty;
 }
@@ -217,7 +218,7 @@ export function findPtyByTty(ttyPath: string): PtyEntry | undefined {
   if (!ttyPath) return undefined;
   const normalized = normalizeTty(ttyPath);
   for (const entry of getRegistry().values()) {
-    if (!entry.sessionId && entry.ttyPath) {
+    if (!entry.sessionId && !entry.exited && entry.ttyPath) {
       if (entry.ttyPath === normalized || normalizeTty(entry.ttyPath) === normalized) {
         return entry;
       }
@@ -233,7 +234,7 @@ export function findPtyByCwd(cwd: string): PtyEntry | undefined {
   if (!cwd) return undefined;
   const cutoff = Date.now() - 30_000;
   for (const entry of getRegistry().values()) {
-    if (!entry.sessionId && entry.cwd === cwd && entry.spawnedAt > cutoff) {
+    if (!entry.sessionId && !entry.exited && entry.cwd === cwd && entry.spawnedAt > cutoff) {
       return entry;
     }
   }

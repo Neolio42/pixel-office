@@ -72,6 +72,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
   const [spawnError, setSpawnError] = useState<string | null>(null);
   /** Map of ptyId → data handler, so multiple terminals can receive data simultaneously */
   const terminalHandlersRef = useRef<Map<string, (msg: WSMessageToClient) => void>>(new Map());
+  const exitTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const initialSyncDoneRef = useRef(false);
   /** Called on successful spawn — used by UI to save recents only on success */
   const onSpawnSuccessRef = useRef<((ptyId: string) => void) | null>(null);
 
@@ -95,15 +97,13 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     }
   }, []);
 
-  /** Sync ptyTabs with session data — create tab if missing, update cwd if changed */
+  /** Update existing ptyTab cwd from session data. Never creates tabs —
+   *  creation only happens via spawn-result or initial sessions snapshot on connect. */
   const syncPtyTabRef = useRef((session: Session) => {
     if (!session.ptyId) return;
     setPtyTabs(prev => {
       const idx = prev.findIndex(t => t.ptyId === session.ptyId);
-      if (idx < 0) {
-        // Session has a ptyId but no tab — create one (e.g., after page reload)
-        return [...prev, { ptyId: session.ptyId!, cwd: session.cwd, exited: false }];
-      }
+      if (idx < 0) return prev; // don't auto-create — user may have closed it
       if (prev[idx].cwd === session.cwd) return prev;
       const next = [...prev];
       next[idx] = { ...next[idx], cwd: session.cwd };
@@ -144,8 +144,14 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             if (!workers.has(s.sessionId)) {
               workers.set(s.sessionId, createWorker(s.sessionId, s.deskIndex));
             }
-            syncPtyTabRef.current(s);
+            if (!initialSyncDoneRef.current && s.ptyId) {
+              // First sessions message (page load) — restore tabs for live embedded PTYs
+              setPtyTabs(prev => prev.some(t => t.ptyId === s.ptyId) ? prev : [...prev, { ptyId: s.ptyId!, cwd: s.cwd, exited: false }]);
+            } else {
+              syncPtyTabRef.current(s); // subsequent messages — only update cwd
+            }
           }
+          initialSyncDoneRef.current = true;
           const sessionIds = new Set(msg.sessions.map(s => s.sessionId));
           for (const [id, worker] of workers) {
             if (!sessionIds.has(id) && !worker.leaving) {
@@ -230,9 +236,11 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
           terminalHandlersRef.current.get(msg.ptyId)?.(msg);
           // Remove the tab — ghost tabs (exitCode -1) immediately, normal exits after 2s
           const delay = msg.exitCode === -1 ? 0 : 2000;
-          setTimeout(() => {
+          const timerId = setTimeout(() => {
+            exitTimersRef.current.delete(timerId);
             setPtyTabs(prev => prev.filter(t => t.ptyId !== msg.ptyId));
           }, delay);
+          exitTimersRef.current.add(timerId);
           break;
         }
         case 'terminal-output':
@@ -252,6 +260,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     return () => {
       ws.removeEventListener('message', handleMessage);
       ws.close();
+      for (const id of exitTimersRef.current) clearTimeout(id);
+      exitTimersRef.current.clear();
     };
   }, []);
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addSession, getAllSessions, setSessionTask } from '@/lib/store';
+import { addSession, getAllSessions, removeSession, setSessionTask } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 import { readTaskFromTranscript } from '@/lib/transcript';
 import { findPtyByTty, findPtyByCwd, linkSessionToPty } from '@/lib/pty-manager';
@@ -21,6 +21,12 @@ export async function POST(req: NextRequest) {
   if (ptyEntry) {
     linkSessionToPty(sessionId, ptyEntry.ptyId);
     session.ptyId = ptyEntry.ptyId;
+    // Remove orphan sessions from previous /clear cycles on the same PTY
+    for (const s of getAllSessions()) {
+      if (s.sessionId !== sessionId && s.ptyId === ptyEntry.ptyId) {
+        removeSession(s.sessionId);
+      }
+    }
   }
 
   broadcast({ type: 'sessions', sessions: getAllSessions() });
