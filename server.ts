@@ -38,10 +38,11 @@ app.prepare().then(() => {
         if (ptyId) killPty(ptyId);
       }
 
-      // Clean up orphaned PTYs — PTYs with no active session
+      // Clean up orphaned PTYs — exited PTYs with no active session
+      // Don't kill live unlinked PTYs — they may be waiting for re-link after /clear
       const activePtyIds = new Set(getAllSessions().filter(s => s.ptyId).map(s => s.ptyId!));
       for (const entry of getAllPtyEntries()) {
-        if (!activePtyIds.has(entry.ptyId)) {
+        if (!activePtyIds.has(entry.ptyId) && entry.exited) {
           killPty(entry.ptyId);
           console.log(`[cleanup] Removed orphaned PTY: ${entry.ptyId}`);
         }

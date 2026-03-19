@@ -116,9 +116,18 @@ function classifySingleCommand(args: string[]): 'safe' | 'risky' | 'unknown' {
   // Check deny list first (deny > allow)
   if (RISKY_COMMANDS.has(base)) return 'risky';
 
-  // Git: check subcommand
+  // Git: find the subcommand (skip flags like -C, --no-pager, etc.)
   if (base === 'git') {
-    const sub = args[1];
+    // Git flags that take a value argument: skip both the flag and its value
+    const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
+    let sub: string | undefined;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      if (GIT_VALUE_FLAGS.has(a)) { i++; continue; } // skip flag + its value
+      if (a.startsWith('-')) continue; // skip other flags (--no-pager, --bare, etc.)
+      sub = a;
+      break;
+    }
     if (!sub) return 'safe'; // bare `git` is fine
     if (sub === 'push') return 'risky';
     if (sub === 'reset' && args.includes('--hard')) return 'risky';

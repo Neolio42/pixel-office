@@ -44,6 +44,7 @@ export interface PtyEntry {
   cwd: string;
   cols: number;
   rows: number;
+  spawnedAt: number;
   scrollback: string[];
   scrollbackBytes: number;
   exited: boolean;
@@ -125,6 +126,7 @@ export function spawnSession(cwd: string, cols = 120, rows = 30): PtyEntry {
     cwd,
     cols,
     rows,
+    spawnedAt: Date.now(),
     scrollback: [],
     scrollbackBytes: 0,
     exited: false,
@@ -182,6 +184,13 @@ export function killPty(ptyId: string): boolean {
   return true;
 }
 
+export function unlinkSessionFromPty(ptyId: string): boolean {
+  const entry = getRegistry().get(ptyId);
+  if (!entry) return false;
+  entry.sessionId = undefined;
+  return true;
+}
+
 export function linkSessionToPty(sessionId: string, ptyId: string): boolean {
   const entry = getRegistry().get(ptyId);
   if (!entry) return false;
@@ -208,11 +217,14 @@ export function findPtyByTty(ttyPath: string): PtyEntry | undefined {
   return undefined;
 }
 
-/** Find an unlinked PTY by matching cwd — fallback when tty matching fails */
+/** Find an unlinked PTY by matching cwd — fallback when tty matching fails.
+ *  Only matches PTYs spawned within the last 30s to prevent external sessions
+ *  from accidentally linking to an embedded PTY with the same cwd. */
 export function findPtyByCwd(cwd: string): PtyEntry | undefined {
   if (!cwd) return undefined;
+  const cutoff = Date.now() - 30_000;
   for (const entry of getRegistry().values()) {
-    if (!entry.sessionId && entry.cwd === cwd) {
+    if (!entry.sessionId && entry.cwd === cwd && entry.spawnedAt > cutoff) {
       return entry;
     }
   }
