@@ -1,6 +1,6 @@
 {
   "name": "@neolio42/pixel-office",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Visualize your Claude Code sessions as pixel art workers in a tiny office",
   "author": "Nedas Mackevičius",
   "license": "MIT",
