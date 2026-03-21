@@ -1,12 +1,31 @@
 {
-  "name": "pixel-office",
+  "name": "@neolio42/pixel-office",
   "version": "0.1.0",
-  "private": true,
+  "description": "Visualize your Claude Code sessions as pixel art workers in a tiny office",
+  "author": "Nedas Mackevičius",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neolio42/pixel-office.git"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "pixel-art",
+    "visualization",
+    "hooks",
+    "developer-tools"
+  ],
+  "bin": {
+    "pixel-office": "./bin.sh"
+  },
   "scripts": {
     "dev": "npx tsx server.ts",
     "build": "next build",
-    "start": "node -r tsx/cjs server.ts",
-    "lint": "eslint"
+    "start": "npx tsx bin.ts",
+    "lint": "eslint",
+    "setup": "npx tsx scripts/setup.ts",
+    "uninstall": "npx tsx scripts/setup.ts uninstall"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -15,6 +34,7 @@
     "node-pty": "^1.2.0-beta.12",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "tsx": "^4.21.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
@@ -26,7 +46,6 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

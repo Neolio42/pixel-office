@@ -1,0 +1,13 @@
+.next
+.git
+.claude
+node_modules
+tsconfig.tsbuildinfo
+PLAN.md
+CLAUDE.md
+eslint.config.mjs
+public/file.svg
+public/globe.svg
+public/next.svg
+public/vercel.svg
+public/window.svg
