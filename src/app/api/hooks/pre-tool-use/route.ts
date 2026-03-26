@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { getSession, addSession, updateSession, updateSessionTty, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus } from '@/lib/store';
 import { classifyTool } from '@/lib/tool-classifier';
 import { createApproval } from '@/lib/approval-queue';
@@ -60,13 +60,32 @@ function extractFocusFromAssistant(text: string): string | null {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const sessionId = body.session_id;
-  const toolName = body.tool_name || 'Unknown';
-  const toolInput = body.tool_input || {};
-  const cwd = body.cwd || '';
-  const tty = body.tty || '';
-  const transcriptPath = body.transcript_path || undefined;
+  let body: Record<string, unknown>;
+  const raw = await req.text();
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    // Hook payload may contain control characters in tool_input (e.g. tabs in heredocs).
+    // eslint-disable-next-line no-control-regex
+    const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, (ch) => {
+      if (ch === '\n') return '\\n';
+      if (ch === '\r') return '\\r';
+      if (ch === '\t') return '\\t';
+      return '';
+    });
+    try {
+      body = JSON.parse(cleaned);
+    } catch {
+      console.error('[Hook] Unparseable body, first 300 chars:', raw.slice(0, 300));
+      return NextResponse.json({});
+    }
+  }
+  const sessionId = String(body.session_id || '');
+  const toolName = String(body.tool_name || 'Unknown');
+  const toolInput = (body.tool_input || {}) as Record<string, unknown>;
+  const cwd = String(body.cwd || '');
+  const tty = String(body.tty || '');
+  const transcriptPath = body.transcript_path ? String(body.transcript_path) : undefined;
 
   // Auto-create session if it doesn't exist (e.g. session-start was missed)
   if (!getSession(sessionId)) {
@@ -133,7 +152,7 @@ export async function POST(req: NextRequest) {
   // Record the tool call before classification
   addToolCall(sessionId, toolName, toolInput);
 
-  const { state, needsApproval } = classifyTool(toolName, toolInput);
+  const { state, needsApproval, reason } = classifyTool(toolName, toolInput);
 
   // Update worker state
   const session = updateSession(sessionId, state, toolName);
@@ -157,13 +176,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({});
   }
 
-  // Play notification sound so the boss knows
+  // Play notification sound so the boss knows (non-blocking)
   try {
-    execSync('afplay /System/Library/Sounds/Bottle.aiff &', { timeout: 1000 });
-  } catch { /* ignore */ }
+    spawn('afplay', ['/System/Library/Sounds/Bottle.aiff'], { detached: true, stdio: 'ignore' }).unref();
+  } catch { /* ignore — not macOS or sound not found */ }
 
   // Needs approval — block until boss decides in the browser
-  const { approval, promise } = createApproval(sessionId, toolName, toolInput);
+  const { approval, promise } = createApproval(sessionId, toolName, toolInput, reason);
 
   broadcast({
     type: 'approval-request',
@@ -172,18 +191,33 @@ export async function POST(req: NextRequest) {
       sessionId: approval.sessionId,
       toolName: approval.toolName,
       toolInput: approval.toolInput,
+      createdAt: approval.createdAt,
+      reason,
     },
   });
 
-  console.log(`[Hook] Awaiting approval for ${toolName} in session ${sessionId}`);
-  const decision = await promise;
-  console.log(`[Hook] Decision for ${toolName}: ${decision}`);
+  console.log(`[Hook] Awaiting approval for ${toolName} (${reason}) in session ${sessionId}`);
+  const result = await promise;
+  console.log(`[Hook] Decision for ${toolName}: ${result.decision}${result.message ? ` — "${result.message}"` : ''}`);
+
+  // Always broadcast resolution — covers timeout, disconnect-denial, and normal paths.
+  // Without this, timeout/disconnect resolutions leave ghost toasts in the UI.
+  broadcast({ type: 'approval-resolved', approvalId: approval.id });
+
+  const hookResponse: Record<string, unknown> = {
+    hookEventName: 'PreToolUse',
+    permissionDecision: result.decision,
+    permissionDecisionReason: result.message || (result.decision === 'allow' ? 'Boss approved' : 'Boss denied'),
+  };
+
+  // additionalContext goes at the TOP level (not inside hookSpecificOutput)
+  // so Claude actually sees the boss's instructions
+  if (result.message) {
+    hookResponse.additionalContext = `[Boss says] ${result.message}`;
+  }
 
   return NextResponse.json({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: decision,
-      permissionDecisionReason: decision === 'allow' ? 'Boss approved' : 'Boss denied',
-    },
+    hookSpecificOutput: hookResponse,
+    ...(result.message ? { additionalContext: `[Boss says] ${result.message}` } : {}),
   });
 }

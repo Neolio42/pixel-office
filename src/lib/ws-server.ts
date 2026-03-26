@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { WSMessageToClient, WSMessageFromClient } from './types';
-import { resolveApproval } from './approval-queue';
+import { resolveApproval, getPendingApprovals } from './approval-queue';
 import { getAllSessions } from './store';
 import {
   spawnSession,
@@ -82,6 +82,21 @@ export function initWSS(server: Server) {
     });
     ws.send(JSON.stringify({ type: 'sessions', sessions }));
 
+    // Replay any pending approvals so reconnecting/new clients can act on them
+    for (const a of getPendingApprovals()) {
+      ws.send(JSON.stringify({
+        type: 'approval-request',
+        approval: {
+          id: a.id,
+          sessionId: a.sessionId,
+          toolName: a.toolName,
+          toolInput: a.toolInput,
+          createdAt: a.createdAt,
+          reason: a.reason || 'unknown',
+        },
+      }));
+    }
+
     ws.on('message', (raw) => {
       try {
         const msg: WSMessageFromClient = JSON.parse(raw.toString());
@@ -93,6 +108,18 @@ export function initWSS(server: Server) {
 
     ws.on('close', () => {
       console.log('[WS] Client disconnected');
+      // Delay before checking — gives the browser time to reconnect on refresh
+      setTimeout(() => {
+        if (!hasConnectedClients()) {
+          const pending = getPendingApprovals();
+          if (pending.length > 0) {
+            console.log(`[WS] No clients after 2s — denying ${pending.length} pending approval(s)`);
+            for (const approval of pending) {
+              resolveApproval(approval.id, 'deny', 'Browser disconnected — no boss to approve');
+            }
+          }
+        }
+      }, 2000);
     });
 
     ws.on('error', (err) => {
@@ -104,10 +131,10 @@ export function initWSS(server: Server) {
 function handleClientMessage(ws: WebSocket, msg: WSMessageFromClient) {
   switch (msg.type) {
     case 'approval-response': {
-      const resolved = resolveApproval(msg.approvalId, msg.decision);
-      if (resolved) {
-        broadcast({ type: 'approval-resolved', approvalId: msg.approvalId });
-      }
+      resolveApproval(msg.approvalId, msg.decision, msg.message);
+      // Always broadcast — multiple tabs may have the same toast visible.
+      // If the ID was already resolved, this is harmless (client filters by ID).
+      broadcast({ type: 'approval-resolved', approvalId: msg.approvalId });
       break;
     }
 

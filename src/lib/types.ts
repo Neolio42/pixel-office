@@ -26,14 +26,15 @@ export interface PendingApproval {
   toolName: string;
   toolInput: Record<string, unknown>;
   createdAt: number;
-  resolve: (decision: 'allow' | 'deny') => void;
+  reason: 'safe' | 'risky' | 'unknown';
+  resolve: (decision: { decision: 'allow' | 'deny'; message?: string }) => void;
 }
 
 export type WSMessageToClient =
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
   | { type: 'session-remove'; sessionId: string }
-  | { type: 'approval-request'; approval: { id: string; sessionId: string; toolName: string; toolInput: Record<string, unknown> } }
+  | { type: 'approval-request'; approval: { id: string; sessionId: string; toolName: string; toolInput: Record<string, unknown>; createdAt: number; reason: 'safe' | 'risky' | 'unknown' } }
   | { type: 'approval-resolved'; approvalId: string }
   | { type: 'notification'; sessionId: string; message: string }
   | { type: 'terminal-output'; ptyId: string; data: string }
@@ -42,7 +43,7 @@ export type WSMessageToClient =
   | { type: 'spawn-result'; ptyId: string; success: boolean; error?: string };
 
 export type WSMessageFromClient =
-  | { type: 'approval-response'; approvalId: string; decision: 'allow' | 'deny' }
+  | { type: 'approval-response'; approvalId: string; decision: 'allow' | 'deny'; message?: string }
   | { type: 'terminal-input'; ptyId: string; data: string }
   | { type: 'terminal-resize'; ptyId: string; cols: number; rows: number }
   | { type: 'terminal-subscribe'; ptyId: string; cols?: number; rows?: number }

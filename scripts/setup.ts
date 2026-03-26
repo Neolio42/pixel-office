@@ -36,7 +36,7 @@ const PIXEL_OFFICE_HOOKS: Record<string, HookEntry> = {
     hooks: [{ type: 'command', command: curlCmd('session-start', 5, true), timeout: 5 }],
   },
   PreToolUse: {
-    hooks: [{ type: 'command', command: curlCmd('pre-tool-use', 30, true), timeout: 30 }],
+    hooks: [{ type: 'command', command: curlCmd('pre-tool-use', 300, true), timeout: 300 }],
   },
   PostToolUse: {
     hooks: [{ type: 'command', command: curlCmd('post-tool-use', 5, false), timeout: 5 }],
@@ -78,11 +78,17 @@ function install(): void {
   const settings = readSettings();
   const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>;
   let added = 0;
+  let updated = 0;
 
   for (const [event, entry] of Object.entries(PIXEL_OFFICE_HOOKS)) {
     const existing = hooks[event] ?? [];
     if (hasPixelOfficeHook(existing)) {
-      console.log(`  ⏭  ${event} — already registered`);
+      // Replace existing pixel-office hook with the latest version
+      hooks[event] = [...existing.filter(
+        (e) => !e.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
+      ), entry];
+      console.log(`  ↻  ${event} — updated`);
+      updated++;
       continue;
     }
     hooks[event] = [...existing, entry];
@@ -93,10 +99,12 @@ function install(): void {
   settings.hooks = hooks;
   writeSettings(settings);
 
-  if (added === 0) {
-    console.log('\nAll hooks already registered. Nothing to do.');
+  if (added === 0 && updated === 0) {
+    console.log('\nAll hooks already up to date. Nothing to do.');
   } else {
-    console.log(`\n${added} hook(s) added to ${SETTINGS_PATH}`);
+    if (added > 0) console.log(`\n${added} hook(s) added`);
+    if (updated > 0) console.log(`${updated} hook(s) updated`);
+    console.log(`Written to ${SETTINGS_PATH}`);
   }
 
   console.log('\nStart Pixel Office:  npm run dev');

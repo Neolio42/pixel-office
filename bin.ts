@@ -35,7 +35,7 @@ interface HookEntry {
 
 const PIXEL_OFFICE_HOOKS: Record<string, HookEntry> = {
   SessionStart: { hooks: [{ type: 'command', command: curlCmd('session-start', 5, true), timeout: 5 }] },
-  PreToolUse: { hooks: [{ type: 'command', command: curlCmd('pre-tool-use', 30, true), timeout: 30 }] },
+  PreToolUse: { hooks: [{ type: 'command', command: curlCmd('pre-tool-use', 300, true), timeout: 300 }] },
   PostToolUse: { hooks: [{ type: 'command', command: curlCmd('post-tool-use', 5, false), timeout: 5 }] },
   Notification: { hooks: [{ type: 'command', command: curlCmd('notification', 5, false), timeout: 5 }] },
   UserPromptSubmit: { hooks: [{ type: 'command', command: curlCmd('user-prompt', 5, false), timeout: 5 }] },

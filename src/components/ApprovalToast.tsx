@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
 import { ApprovalRequest } from '@/hooks/usePixelOffice';
 import { Session } from '@/lib/types';
 
@@ -63,13 +64,24 @@ function formatToolDetails(toolName: string, toolInput: Record<string, unknown>)
 interface Props {
   approval: ApprovalRequest;
   session?: Session;
-  onDecision: (approvalId: string, decision: 'allow' | 'deny') => void;
+  onDecision: (approvalId: string, decision: 'allow' | 'deny', message?: string) => void;
 }
 
 export function ApprovalToast({ approval, session, onDecision }: Props) {
   const { title, details } = formatToolDetails(approval.toolName, approval.toolInput);
   const workerName = session ? (WORKER_NAMES[session.deskIndex] ?? `Worker ${session.deskIndex}`) : null;
   const cwdShort = session ? session.cwd.split('/').slice(-2).join('/') : null;
+  const [message, setMessage] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus input when toast appears
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSubmit = (decision: 'allow' | 'deny') => {
+    onDecision(approval.id, decision, message.trim() || undefined);
+  };
 
   return (
     <div className="bg-[#1a1a2e] border border-[#bf8b4a]/60 rounded-lg shadow-2xl min-w-[420px] max-w-[580px] overflow-hidden">
@@ -109,22 +121,40 @@ export function ApprovalToast({ approval, session, onDecision }: Props) {
             </div>
           ))}
         </div>
+
+        {/* Instructions input */}
+        <input
+          ref={inputRef}
+          type="text"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              handleSubmit(e.shiftKey ? 'deny' : 'allow');
+            }
+            e.stopPropagation();
+          }}
+          placeholder="Instructions for Claude (optional)"
+          className="w-full bg-[#0e0e1a] border border-[#2a2a4a] focus:border-[#bf8b4a]/50 rounded px-2.5 py-2 text-[#ccccee] text-xs font-mono placeholder-[#4a4a6a] outline-none transition-colors"
+        />
       </div>
 
       {/* Actions */}
       <div className="px-4 pb-3 flex gap-2">
         <button
-          onClick={() => onDecision(approval.id, 'allow')}
+          onClick={() => handleSubmit('allow')}
           className="flex-1 px-4 py-2.5 bg-[#1a3a2a] hover:bg-[#2a5a3a] border border-[#2a6b3a] text-[#4abf5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
         >
           <span>Approve</span>
-          <span className="text-[#4abf5c]/60 text-xs">⌘Y</span>
+          <span className="text-[#4abf5c]/60 text-xs">↵</span>
         </button>
         <button
-          onClick={() => onDecision(approval.id, 'deny')}
-          className="flex-1 px-4 py-2.5 bg-[#3a1a1a] hover:bg-[#5a2a2a] border border-[#6b2a2a] text-[#e05c5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer"
+          onClick={() => handleSubmit('deny')}
+          className="flex-1 px-4 py-2.5 bg-[#3a1a1a] hover:bg-[#5a2a2a] border border-[#6b2a2a] text-[#e05c5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
         >
-          Deny
+          <span>Deny</span>
+          <span className="text-[#e05c5c]/60 text-xs">⇧↵</span>
         </button>
       </div>
     </div>
