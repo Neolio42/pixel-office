@@ -1,5 +1,6 @@
 import { WorkerState } from './types';
 import { execFileSync } from 'child_process';
+import { isCommandWhitelisted, isToolWhitelisted } from './whitelist';
 
 export type ClassificationReason = 'safe' | 'risky' | 'unknown';
 
@@ -37,6 +38,14 @@ const SAFE_COMMANDS = new Set([
   'instruments', 'lipo', 'otool', 'nm', 'dsymutil', 'dwarfdump',
   'plutil', 'defaults', 'codesign', 'security',
   'xctrace', 'actool', 'ibtool',
+  // Mobile / UI testing
+  'maestro', 'fastlane', 'pod', 'appium',
+  // Misc dev tools
+  'tree', 'env', 'open', 'pbcopy', 'pbpaste', 'uname', 'arch', 'sysctl', 'sw_vers',
+  'nvm', 'fnm', 'asdf', 'rbenv', 'pyenv',
+  'bundle', 'gem', 'ruby',
+  // Formatters / linters already partially covered but adding explicit ones
+  'biome', 'oxlint', 'dprint',
 ]);
 
 // Git subcommands that are safe (read-only or local-only, no destructive flags)
@@ -51,6 +60,22 @@ const SAFE_GIT = new Set([
 // npm/pip subcommands that are safe
 const SAFE_NPM = new Set(['run', 'test', 'start', 'build', 'init', 'info', 'ls', 'list', 'outdated', 'audit', 'pack', 'version', 'why']);
 
+// npx packages that are safe (common dev tools)
+const SAFE_NPX = new Set([
+  'tsc', 'typescript', 'ts-node', 'tsx',
+  'prettier', 'eslint', 'biome',
+  'jest', 'vitest', 'mocha', 'playwright',
+  'next', 'vite', 'nuxi', 'astro',
+  'tailwindcss', 'postcss',
+  'prisma', 'drizzle-kit',
+  'turbo', 'lerna', 'nx',
+  'create-react-app', 'create-next-app', 'create-vite',
+  'rimraf', 'shx', 'cross-env',
+  'concurrently', 'wait-on',
+  'depcheck', 'madge', 'license-checker',
+  'changeset', 'semantic-release',
+]);
+
 // Docker subcommands that are safe (read-only)
 const SAFE_DOCKER = new Set(['ps', 'images', 'inspect', 'logs', 'stats', 'version', 'info', 'pull', 'network', 'volume', 'context', 'buildx', 'compose', 'top', 'port', 'diff', 'history']);
 
@@ -64,7 +89,6 @@ const RISKY_COMMANDS = new Set([
   'dd', 'mkfs', 'fdisk',
   'reboot', 'shutdown', 'halt', 'poweroff',
   'iptables', 'ufw', 'systemctl',
-  'npx',
 ]);
 
 // Shell metacharacters that indicate compound commands
@@ -153,8 +177,16 @@ function classifySingleCommand(args: string[]): ClassificationReason {
   // Fix 2: sed -i modifies files in-place — destructive
   if (base === 'sed' && args.some(a => a === '-i' || a.startsWith('-i'))) return 'risky';
 
-  // Fix 3: find -delete and find -exec are destructive
-  if (base === 'find' && args.some(a => a === '-delete' || a === '-exec' || a === '-execdir')) return 'risky';
+  // Fix 3: find -delete is destructive; -exec depends on what it runs
+  if (base === 'find') {
+    if (args.includes('-delete')) return 'risky';
+    const execIdx = args.findIndex(a => a === '-exec' || a === '-execdir');
+    if (execIdx >= 0) {
+      const execCmd = (args[execIdx + 1] || '').split('/').pop() || '';
+      // If the command after -exec is in SAFE_COMMANDS (wc, grep, cat, etc.), find is safe
+      if (!SAFE_COMMANDS.has(execCmd)) return 'risky';
+    }
+  }
 
   // Fix 4: curl/wget data upload/exfiltration flags
   if (base === 'curl') {
@@ -204,6 +236,20 @@ function classifySingleCommand(args: string[]): ClassificationReason {
     if (sub === 'install' || sub === 'i' || sub === 'uninstall' || sub === 'remove' || sub === 'exec' || sub === 'x' || sub === 'publish') return 'risky';
     if (base === 'npm' && SAFE_NPM.has(sub || '')) return 'safe';
     return 'unknown';
+  }
+
+  // npx: check what package it's running
+  if (base === 'npx') {
+    // Skip flags to find the package name
+    let pkg: string | undefined;
+    for (let i = 1; i < args.length; i++) {
+      if (args[i].startsWith('-')) continue;
+      pkg = args[i];
+      break;
+    }
+    if (!pkg) return 'safe'; // bare npx
+    if (SAFE_NPX.has(pkg)) return 'safe';
+    return 'unknown'; // unknown package — ask boss
   }
 
   // pnpm/yarn/bun: check subcommand
@@ -259,6 +305,9 @@ function classifySingleCommand(args: string[]): ClassificationReason {
   // Check safe list
   if (SAFE_COMMANDS.has(base)) return 'safe';
 
+  // Check user whitelist before giving up
+  if (isCommandWhitelisted(args)) return 'safe';
+
   return 'unknown';
 }
 
@@ -304,8 +353,20 @@ const SAFE_MCP_ACTIONS = /(^|_)(get|list|read|find|search|describe|show|view|cou
 const RISKY_MCP_ACTIONS = /(^|_)(delete|remove|drop|destroy|execute|javascript|computer|send|create|update|modify|edit|write|upload|publish|run|invoke|apply|trigger|call|patch|deploy|post|put)(_|$)/;
 
 export function classifyTool(toolName: string, toolInput: Record<string, unknown>): Classification {
+  // Check user whitelist first — overrides all built-in classification
+  if (isToolWhitelisted(toolName)) {
+    const state: WorkerState = toolName.startsWith('mcp__') ? 'reading' : 'typing';
+    return { state, needsApproval: false, reason: 'safe' };
+  }
+
   // MCP tools — classify by action pattern instead of blanket approve
   if (toolName.startsWith('mcp__')) {
+    // Local tools — always safe (browser automation, design tools, etc.)
+    const server = toolName.split('__')[1] || '';
+    if (server === 'claude-in-chrome' || server === 'stitch' || server === 'n8n-mcp') {
+      return { state: 'typing', needsApproval: false, reason: 'safe' };
+    }
+
     const actionMatch = toolName.match(/^mcp__[^_]+(?:_[^_]+)*__(.+)$/);
     const action = actionMatch ? actionMatch[1] : '';
 
@@ -334,6 +395,8 @@ export function classifyTool(toolName: string, toolInput: Record<string, unknown
 
   if (toolName === 'Bash' || toolName === 'BashOutput') {
     const command = String(toolInput.command || '');
+    // Full classifier runs first (catches risky flags like -d, --force, -exec).
+    // Whitelist check is inside classifySingleCommand — only overrides 'unknown', never 'risky'.
     const { needsApproval, reason } = classifyBashCommand(command);
     return {
       state: needsApproval ? 'waiting' : 'typing',

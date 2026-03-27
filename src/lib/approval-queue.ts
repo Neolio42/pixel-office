@@ -84,6 +84,10 @@ export function resolveApproval(id: string, decision: 'allow' | 'deny', message?
   return true;
 }
 
+export function getPendingApproval(id: string): PendingApproval | undefined {
+  return getPending().get(id);
+}
+
 export function getPendingApprovals(): PendingApproval[] {
   return [...getPending().values()];
 }

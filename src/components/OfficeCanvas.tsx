@@ -9,6 +9,7 @@ import { WorkerPanel } from './WorkerPanel';
 import { ApprovalToast } from './ApprovalToast';
 import { WorkerPopup } from './WorkerPopup';
 import { TerminalTile, EmptyTile } from './TerminalTile';
+import { WhitelistPanel } from './WhitelistPanel';
 
 /** Max terminals visible in the grid at once */
 const MAX_TILES = 3;
@@ -16,13 +17,14 @@ const MAX_TILES = 3;
 export function OfficeCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const {
-    sessions, approvals, approvalsRef, sendApproval, assetsLoaded, assetError,
+    sessions, approvals, approvalsRef, sendApproval, sendAlwaysAllow, assetsLoaded, assetError,
     selectedWorker, setSelectedWorker, workersRef,
     wsRef, ptyTabs, setPtyTabs, spawnSession, spawnError, terminalHandlersRef, onSpawnSuccessRef,
     interactionRef, gridRef, reconnectCount,
   } = usePixelOffice(canvasRef);
   const [popupAnchor, setPopupAnchor] = useState<{ x: number; y: number } | null>(null);
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
+  const [whitelistOpen, setWhitelistOpen] = useState(false);
 
   // Which ptyIds are pinned to visible tiles (up to MAX_TILES)
   type TileAction =
@@ -329,6 +331,20 @@ export function OfficeCanvas() {
 
   return (
     <div className="flex h-screen w-screen bg-[#08080f] overflow-hidden">
+      {/* Approval toasts — outside overflow-hidden containers so they're never clipped */}
+      {approvals.length > 0 && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-50">
+          {approvals.map(approval => (
+            <ApprovalToast
+              key={approval.id}
+              approval={approval}
+              session={sessions.find(s => s.sessionId === approval.sessionId)}
+              onDecision={sendApproval}
+              onAlwaysAllow={sendAlwaysAllow}
+            />
+          ))}
+        </div>
+      )}
       {/* Main grid area */}
       <div className={`flex-1 grid gap-[1px] p-[1px] min-w-0 ${
         totalTiles === 0
@@ -362,17 +378,14 @@ export function OfficeCanvas() {
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseLeave}
           />
-          {/* Approval toasts */}
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-30">
-            {approvals.map(approval => (
-              <ApprovalToast
-                key={approval.id}
-                approval={approval}
-                session={sessions.find(s => s.sessionId === approval.sessionId)}
-                onDecision={sendApproval}
-              />
-            ))}
-          </div>
+          {/* Settings button */}
+          <button
+            onClick={() => setWhitelistOpen(true)}
+            className="absolute top-2 right-2 z-30 w-7 h-7 rounded bg-[#1a1a2e]/80 hover:bg-[#2a2a4a] border border-[#2a2a4a] text-[#6a6a8a] hover:text-[#ccccee] text-xs font-mono cursor-pointer transition-colors flex items-center justify-center"
+            title="Command whitelist & stats"
+          >
+            ⚙
+          </button>
           {/* Worker popup */}
           {selectedWorker && popupAnchor && (() => {
             const session = sessions.find(s => s.sessionId === selectedWorker);
@@ -419,6 +432,8 @@ export function OfficeCanvas() {
           />
         )}
       </div>
+
+      <WhitelistPanel open={whitelistOpen} onClose={() => setWhitelistOpen(false)} />
 
       {/* Right panel — sessions */}
       <WorkerPanel

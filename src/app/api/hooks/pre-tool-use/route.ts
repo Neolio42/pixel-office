@@ -6,6 +6,7 @@ import { createApproval, resolveApproval } from '@/lib/approval-queue';
 import { broadcast, hasConnectedClients } from '@/lib/ws-server';
 import { readTaskFromTranscript, readLatestAssistantMessage } from '@/lib/transcript';
 import { extractFocusFromAssistant } from '@/lib/text-utils';
+import { logAutoApproved, logBossDecision } from '@/lib/command-log';
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -109,6 +110,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!needsApproval) {
+    logAutoApproved(sessionId, toolName, toolInput, reason);
     return NextResponse.json({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -121,6 +123,7 @@ export async function POST(req: NextRequest) {
   // No browser connected — fall through so Claude Code handles approval in terminal
   if (!hasConnectedClients()) {
     console.log(`[Hook] No browser connected, falling through for ${toolName}`);
+    logBossDecision(sessionId, toolName, toolInput, reason, 'allowed');
     return NextResponse.json({});
   }
 
@@ -158,6 +161,7 @@ export async function POST(req: NextRequest) {
   const result = await Promise.race([promise, orphanCheck]);
   clearInterval(orphanInterval!);
   console.log(`[Hook] Decision for ${toolName}: ${result.decision}${result.message ? ` — "${result.message}"` : ''}`);
+  logBossDecision(sessionId, toolName, toolInput, reason, result.decision === 'allow' ? 'allowed' : 'denied');
 
   // Always broadcast resolution — covers timeout, disconnect-denial, and normal paths.
   // Without this, timeout/disconnect resolutions leave ghost toasts in the UI.

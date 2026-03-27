@@ -38,10 +38,12 @@ export type WSMessageToClient =
   | { type: 'terminal-output'; ptyId: string; data: string }
   | { type: 'terminal-scrollback'; ptyId: string; data: string }
   | { type: 'terminal-exited'; ptyId: string; exitCode: number }
-  | { type: 'spawn-result'; ptyId: string; success: boolean; error?: string };
+  | { type: 'spawn-result'; ptyId: string; success: boolean; error?: string }
+  | { type: 'whitelist-added'; pattern: string; label: string };
 
 export type WSMessageFromClient =
   | { type: 'approval-response'; approvalId: string; decision: 'allow' | 'deny'; message?: string }
+  | { type: 'always-allow'; approvalId: string }
   | { type: 'terminal-input'; ptyId: string; data: string }
   | { type: 'terminal-resize'; ptyId: string; cols: number; rows: number }
   | { type: 'terminal-subscribe'; ptyId: string; cols?: number; rows?: number }

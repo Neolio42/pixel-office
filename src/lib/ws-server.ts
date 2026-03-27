@@ -5,8 +5,9 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { WSMessageToClient, WSMessageFromClient } from './types';
-import { resolveApproval, getPendingApprovals } from './approval-queue';
+import { resolveApproval, getPendingApprovals, getPendingApproval } from './approval-queue';
 import { getAllSessions } from './store';
+import { addWhitelistRule, extractBashEntry, extractToolEntry } from './whitelist';
 import {
   spawnSession,
   writeToPty,
@@ -144,6 +145,36 @@ function handleClientMessage(ws: WebSocket, msg: WSMessageFromClient) {
     case 'approval-response': {
       resolveApproval(msg.approvalId, msg.decision, msg.message);
       // Pre-tool-use route broadcasts approval-resolved after the promise resolves.
+      break;
+    }
+
+    case 'always-allow': {
+      console.log(`[WS] always-allow received for ${msg.approvalId}`);
+      const approval = getPendingApproval(msg.approvalId);
+      if (approval) {
+        let ruleType: 'command' | 'tool';
+        let entry: string;
+        let label: string;
+
+        if (approval.toolName === 'Bash' || approval.toolName === 'BashOutput') {
+          ruleType = 'command';
+          const cmd = String(approval.toolInput.command || '');
+          const extracted = extractBashEntry(cmd);
+          entry = extracted.entry;
+          label = extracted.label;
+        } else {
+          ruleType = 'tool';
+          const extracted = extractToolEntry(approval.toolName);
+          entry = extracted.entry;
+          label = extracted.label;
+        }
+
+        addWhitelistRule({ type: ruleType, entry, label });
+        resolveApproval(msg.approvalId, 'allow', `Always allowed: ${label}`);
+        console.log(`[Whitelist] Added: ${ruleType} "${entry}" (${label})`);
+
+        broadcast({ type: 'whitelist-added', pattern: entry, label });
+      }
       break;
     }
 

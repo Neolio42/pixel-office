@@ -61,13 +61,24 @@ function formatToolDetails(toolName: string, toolInput: Record<string, unknown>)
   return { title, details };
 }
 
+/** Extract the entry label for the "Always Allow" button — just the base command name. */
+function getAlwaysAllowLabel(toolName: string, toolInput: Record<string, unknown>): string {
+  if (toolName === 'Bash' || toolName === 'BashOutput') {
+    const cmd = String(toolInput.command || '').trim();
+    const args = cmd.split(/\s+/);
+    return (args[0]?.split('/').pop() || args[0] || 'unknown').toLowerCase();
+  }
+  return cleanToolName(toolName);
+}
+
 interface Props {
   approval: ApprovalRequest;
   session?: Session;
   onDecision: (approvalId: string, decision: 'allow' | 'deny', message?: string) => void;
+  onAlwaysAllow: (approvalId: string) => void;
 }
 
-export function ApprovalToast({ approval, session, onDecision }: Props) {
+export function ApprovalToast({ approval, session, onDecision, onAlwaysAllow }: Props) {
   const { title, details } = formatToolDetails(approval.toolName, approval.toolInput);
   const workerName = session ? (WORKER_NAMES[session.deskIndex] ?? `Worker ${session.deskIndex}`) : null;
   const cwdShort = session ? session.cwd.split('/').slice(-2).join('/') : null;
@@ -141,20 +152,29 @@ export function ApprovalToast({ approval, session, onDecision }: Props) {
       </div>
 
       {/* Actions */}
-      <div className="px-4 pb-3 flex gap-2">
+      <div className="px-4 pb-3 flex flex-col gap-2">
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleSubmit('allow')}
+            className="flex-1 px-4 py-2.5 bg-[#1a3a2a] hover:bg-[#2a5a3a] border border-[#2a6b3a] text-[#4abf5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
+          >
+            <span>Approve</span>
+            <span className="text-[#4abf5c]/60 text-xs">↵</span>
+          </button>
+          <button
+            onClick={() => handleSubmit('deny')}
+            className="flex-1 px-4 py-2.5 bg-[#3a1a1a] hover:bg-[#5a2a2a] border border-[#6b2a2a] text-[#e05c5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
+          >
+            <span>Deny</span>
+            <span className="text-[#e05c5c]/60 text-xs">⇧↵</span>
+          </button>
+        </div>
         <button
-          onClick={() => handleSubmit('allow')}
-          className="flex-1 px-4 py-2.5 bg-[#1a3a2a] hover:bg-[#2a5a3a] border border-[#2a6b3a] text-[#4abf5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
+          onClick={() => onAlwaysAllow(approval.id)}
+          className="w-full px-4 py-2 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-xs font-mono rounded transition-colors cursor-pointer flex items-center justify-center gap-1.5"
         >
-          <span>Approve</span>
-          <span className="text-[#4abf5c]/60 text-xs">↵</span>
-        </button>
-        <button
-          onClick={() => handleSubmit('deny')}
-          className="flex-1 px-4 py-2.5 bg-[#3a1a1a] hover:bg-[#5a2a2a] border border-[#6b2a2a] text-[#e05c5c] text-sm font-mono font-bold rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
-        >
-          <span>Deny</span>
-          <span className="text-[#e05c5c]/60 text-xs">⇧↵</span>
+          <span>Always Allow</span>
+          <span className="text-[#6aafcf]/80 font-bold">{getAlwaysAllowLabel(approval.toolName, approval.toolInput)}</span>
         </button>
       </div>
     </div>

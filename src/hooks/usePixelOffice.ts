@@ -108,6 +108,18 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     }
   }, []);
 
+  const sendAlwaysAllow = useCallback((approvalId: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      pendingDecisionsRef.current.set(approvalId, 'allow');
+      wsRef.current.send(JSON.stringify({
+        type: 'always-allow',
+        approvalId,
+      }));
+    } else {
+      console.warn('[WS] Cannot send always-allow — WebSocket not open');
+    }
+  }, []);
+
   // Keep approvalsRef in sync with state
   useEffect(() => { approvalsRef.current = approvals; }, [approvals]);
 
@@ -369,6 +381,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     approvals,
     approvalsRef,
     sendApproval,
+    sendAlwaysAllow,
     assetsLoaded,
     assetError,
     reconnectCount,
