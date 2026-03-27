@@ -331,20 +331,6 @@ export function OfficeCanvas() {
 
   return (
     <div className="flex h-screen w-screen bg-[#08080f] overflow-hidden">
-      {/* Approval toasts — outside overflow-hidden containers so they're never clipped */}
-      {approvals.length > 0 && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-50">
-          {approvals.map(approval => (
-            <ApprovalToast
-              key={approval.id}
-              approval={approval}
-              session={sessions.find(s => s.sessionId === approval.sessionId)}
-              onDecision={sendApproval}
-              onAlwaysAllow={sendAlwaysAllow}
-            />
-          ))}
-        </div>
-      )}
       {/* Main grid area */}
       <div className={`flex-1 grid gap-[1px] p-[1px] min-w-0 ${
         totalTiles === 0
@@ -354,7 +340,7 @@ export function OfficeCanvas() {
             : 'grid-cols-2 grid-rows-2'
       }`}>
         {/* Office tile — always present */}
-        <div className={`relative flex items-center justify-center bg-[#0e0e1e] rounded overflow-hidden ${
+        <div className={`relative flex items-center justify-center bg-[#0e0e1e] rounded ${
           totalTiles >= 3 ? '' : totalTiles === 2 ? '' : totalTiles === 0 ? 'col-span-2 row-span-2' : ''
         }`}>
           {!assetsLoaded && !assetError && (
@@ -386,6 +372,18 @@ export function OfficeCanvas() {
           >
             ⚙
           </button>
+          {/* Approval toasts */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-30">
+            {approvals.map(approval => (
+              <ApprovalToast
+                key={approval.id}
+                approval={approval}
+                session={sessions.find(s => s.sessionId === approval.sessionId)}
+                onDecision={sendApproval}
+                onAlwaysAllow={sendAlwaysAllow}
+              />
+            ))}
+          </div>
           {/* Worker popup */}
           {selectedWorker && popupAnchor && (() => {
             const session = sessions.find(s => s.sessionId === selectedWorker);

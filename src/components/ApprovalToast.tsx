@@ -95,7 +95,7 @@ export function ApprovalToast({ approval, session, onDecision, onAlwaysAllow }: 
   };
 
   return (
-    <div className="bg-[#1a1a2e] border border-[#bf8b4a]/60 rounded-lg shadow-2xl min-w-[420px] max-w-[580px] overflow-hidden">
+    <div className="bg-[#1a1a2e] border border-[#bf8b4a]/60 rounded-lg shadow-2xl min-w-[420px] max-w-[580px]">
       {/* Header */}
       <div className="px-4 py-2.5 bg-[#bf8b4a]/10 border-b border-[#bf8b4a]/20 flex items-center justify-between">
         <div className="flex items-center gap-2">
