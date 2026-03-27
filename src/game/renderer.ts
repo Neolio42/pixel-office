@@ -13,7 +13,7 @@ import {
   GridCell, buildFurniturePlacements, FurniturePlacement,
 } from './office-layout';
 import { AssetBundle, HsbcParams, colorizeImage } from './asset-loader';
-import { drawCharacter, FRAMES, FRAME_DURATIONS, AnimState } from './sprites';
+import { drawCharacter, FRAME_DURATIONS, FRAME_W, FRAME_H, AnimState } from './sprites';
 import { WorkerEntity, getWorkerScreenPos, EmoteType } from './worker-entity';
 
 /** Interaction state passed from the UI layer to the renderer each frame */
@@ -51,8 +51,28 @@ const PC_FRAME_MS = 400;
 // Global animation time for ambient effects
 let globalTime = 0;
 
+// Pre-computed furniture partitions (built once in initRenderer)
+let sortedBgItems: FurniturePlacement[] = [];
+let sortedDesks: FurniturePlacement[] = [];
+let cachedPcItems: FurniturePlacement[] = [];
+let pcDeskMap: Map<FurniturePlacement, number> = new Map();
+
+// Scratch buffer for worker depth-sort (avoids allocation each frame)
+const workerSortBuffer: WorkerEntity[] = [];
+
 export function initRenderer(bundle: AssetBundle): void {
   assets = bundle;
+  const all = getCachedFurniturePlacements();
+  sortedBgItems = all.filter(p => p.type !== 'desk' && p.type !== 'pc')
+    .sort((a, b) => a.ty - b.ty || a.tx - b.tx);
+  sortedDesks = all.filter(p => p.type === 'desk')
+    .sort((a, b) => a.ty - b.ty);
+  cachedPcItems = all.filter(p => p.type === 'pc');
+  pcDeskMap = new Map();
+  for (const p of cachedPcItems) {
+    const deskIdx = DESK_POSITIONS.findIndex(d => d.deskX + 1 === p.tx && d.deskY - 1 === p.ty);
+    pcDeskMap.set(p, deskIdx);
+  }
 }
 
 // ── Floor rendering ─────────────────────────────────────────────────────────
@@ -199,26 +219,7 @@ export function renderOffice(
   }
 
   // ── Pass 3: Background furniture (bookshelves, plants, whiteboard, etc.) ──
-  const furniturePlacements = getCachedFurniturePlacements();
-
-  // Separate desk, PC, and decorative items
-  const deskOnly: FurniturePlacement[] = [];
-  const pcItems: FurniturePlacement[] = [];
-  const bgItems: FurniturePlacement[] = [];
-
-  for (const p of furniturePlacements) {
-    if (p.type === 'desk') {
-      deskOnly.push(p);
-    } else if (p.type === 'pc') {
-      pcItems.push(p);
-    } else {
-      bgItems.push(p);
-    }
-  }
-
-  // Sort bg items by ty (back to front)
-  bgItems.sort((a, b) => a.ty - b.ty || a.tx - b.tx);
-  for (const p of bgItems) {
+  for (const p of sortedBgItems) {
     // Subtle sway for plants
     const isPlant = p.type === 'plant' || p.type === 'plant_2' || p.type === 'large_plant'
       || p.type === 'hanging_plant' || p.type === 'cactus';
@@ -245,17 +246,16 @@ export function renderOffice(
   }
 
   // ── Pass 4a: Desks first ──────────────────────────────────────────────────
-  deskOnly.sort((a, b) => a.ty - b.ty);
-  for (const p of deskOnly) {
+  for (const p of sortedDesks) {
     drawFurniture(ctx, p);
   }
 
   // ── Pass 4b: PCs on top of desks ──────────────────────────────────────────
-  for (const p of pcItems) {
+  for (const p of cachedPcItems) {
     // Use animated PC frame based on worker state at this desk
-    const deskIdx = DESK_POSITIONS.findIndex(d => d.deskX + 1 === p.tx && d.deskY - 1 === p.ty);
+    const deskIdx = pcDeskMap.get(p) ?? -1;
     const worker = deskIdx >= 0
-      ? [...workers].find(w => w.deskIndex === deskIdx && w.arrived && !w.leaving)
+      ? workers.find(w => w.deskIndex === deskIdx && w.arrived && !w.leaving)
       : undefined;
 
     let pcKey: string;
@@ -271,18 +271,17 @@ export function renderOffice(
 
   // ── Pass 5: Workers (depth-sorted by y) ───────────────────────────────────
   const draggedId = interaction?.drag?.workerId ?? null;
-  const sorted = [...workers].sort((a, b) => a.y - b.y);
+  workerSortBuffer.length = 0;
+  workerSortBuffer.push(...workers);
+  workerSortBuffer.sort((a, b) => a.y - b.y);
 
-  const SPRITE_W = 16;
-  const SPRITE_H = 32;
-
-  for (const worker of sorted) {
+  for (const worker of workerSortBuffer) {
     // Skip dragged worker in normal pass — draw them floating at cursor later
     if (worker.sessionId === draggedId) continue;
 
     const pos = getWorkerScreenPos(worker);
-    const renderedW = SPRITE_W * SCALE;
-    const renderedH = SPRITE_H * SCALE;
+    const renderedW = FRAME_W * SCALE;
+    const renderedH = FRAME_H * SCALE;
 
     // Center sprite on tile, bottom-align to tile bottom
     const spx = pos.x + Math.floor((T - renderedW) / 2);
@@ -336,8 +335,8 @@ export function renderOffice(
     if (worker && assets) {
       const { cursorX, cursorY } = interaction.drag;
       const pickupScale = SCALE * 1.3; // bigger = picked up
-      const renderedW = SPRITE_W * pickupScale;
-      const renderedH = SPRITE_H * pickupScale;
+      const renderedW = FRAME_W * pickupScale;
+      const renderedH = FRAME_H * pickupScale;
       const spx = cursorX - renderedW / 2;
       const spy = cursorY - renderedH - 8; // float above cursor
 
@@ -358,8 +357,8 @@ export function renderOffice(
 
       // Ghost at original position (faint)
       const origPos = getWorkerScreenPos(worker);
-      const origW = SPRITE_W * SCALE;
-      const origH = SPRITE_H * SCALE;
+      const origW = FRAME_W * SCALE;
+      const origH = FRAME_H * SCALE;
       const origSpx = origPos.x + Math.floor((T - origW) / 2);
       let origSpy = origPos.y + T - origH;
       if (worker.arrived && !worker.leaving &&
@@ -535,4 +534,4 @@ function drawRoomLabels(ctx: CanvasRenderingContext2D) {
 
 // Re-export for use in worker-entity / usePixelOffice
 export type { AnimState };
-export { FRAMES, FRAME_DURATIONS };
+export { FRAME_DURATIONS };

@@ -59,29 +59,19 @@ export interface DeskPosition {
   deskY: number;
   chairX: number;
   chairY: number;
-  entryX: number;
-  entryY: number;
 }
 
 // 5 desks in the main work area
 export const DESK_POSITIONS: DeskPosition[] = [
-  { deskX: 1, deskY: 3,  chairX: 1, chairY: 4,  entryX: 6, entryY: 13 },
-  { deskX: 4, deskY: 3,  chairX: 4, chairY: 4,  entryX: 6, entryY: 13 },
-  { deskX: 7, deskY: 3,  chairX: 7, chairY: 4,  entryX: 6, entryY: 13 },
-  { deskX: 2, deskY: 8,  chairX: 2, chairY: 9,  entryX: 6, entryY: 13 },
-  { deskX: 7, deskY: 8,  chairX: 7, chairY: 9,  entryX: 6, entryY: 13 },
+  { deskX: 1, deskY: 3,  chairX: 1, chairY: 4 },
+  { deskX: 4, deskY: 3,  chairX: 4, chairY: 4 },
+  { deskX: 7, deskY: 3,  chairX: 7, chairY: 4 },
+  { deskX: 2, deskY: 8,  chairX: 2, chairY: 9 },
+  { deskX: 7, deskY: 8,  chairX: 7, chairY: 9 },
 ];
 
 export const DOOR_X = 6;
 export const DOOR_Y = 14;
-
-// ── Legacy TileType — kept for renderers that may check it ─────────────────
-export type TileType =
-  | 'floor_wood' | 'floor_tile' | 'floor_carpet'
-  | 'wall' | 'wall_door'
-  | 'desk' | 'desk_right' | 'chair' | 'bookshelf' | 'plant'
-  | 'vending_machine' | 'painting' | 'break_table' | 'couch'
-  | 'whiteboard' | 'window';
 
 // ── Furniture placement list ────────────────────────────────────────────────
 // Each entry has tile coords + which asset to draw + optional pixel offsets

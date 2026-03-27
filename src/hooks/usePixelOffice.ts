@@ -73,6 +73,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [ptyTabs, setPtyTabs] = useState<PtyTab[]>([]);
   const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [assetError, setAssetError] = useState<string | null>(null);
+  const [reconnectCount, setReconnectCount] = useState(0);
   /** Map of ptyId → data handler, so multiple terminals can receive data simultaneously */
   const terminalHandlersRef = useRef<Map<string, (msg: WSMessageToClient) => void>>(new Map());
   const exitTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -140,6 +142,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
       setAssetsLoaded(true);
     }).catch(err => {
       console.error('[Assets] Failed to load:', err);
+      setAssetError('Failed to load office assets');
     });
   }, []);
 
@@ -148,6 +151,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
     let reconnectDelay = 1000;
     let intentionalClose = false;
+    let connectionCount = 0;
 
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -155,8 +159,12 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
       wsRef.current = ws;
 
       ws.onopen = () => {
+        connectionCount++;
         console.log('[WS] Connected');
         reconnectDelay = 1000;
+        if (connectionCount > 1) {
+          setReconnectCount(c => c + 1);
+        }
       };
 
       ws.onmessage = (event: MessageEvent) => {
@@ -211,7 +219,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             setWorkerState(worker, s.state);
             setWorkerPlanMode(worker, !!s.inPlanMode);
             if (s.state === 'waiting') {
-              worker.speechBubble = approvalLabel(s.currentTool || 'Unknown', {});
+              const pendingApproval = approvalsRef.current.find(a => a.sessionId === s.sessionId);
+              worker.speechBubble = approvalLabel(s.currentTool || 'Unknown', pendingApproval?.toolInput || {});
             } else if (s.state === 'typing' || s.state === 'reading') {
               const text = s.currentFocus || bubbleText(s);
               if (text) {
@@ -248,16 +257,17 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             break;
           }
           case 'approval-resolved': {
-            // Trigger emote on the worker
             const resolvedApproval = approvalsRef.current.find(a => a.id === msg.approvalId);
-            const decision = pendingDecisionsRef.current.get(msg.approvalId);
-            if (resolvedApproval && decision) {
+            if (resolvedApproval) {
               const worker = workersRef.current.get(resolvedApproval.sessionId);
               if (worker) {
-                triggerEmote(worker, decision === 'allow' ? 'approved' : 'denied');
-                worker.speechBubble = null; // clear approval label
+                worker.speechBubble = null;
+                const decision = pendingDecisionsRef.current.get(msg.approvalId);
+                if (decision) {
+                  triggerEmote(worker, decision === 'allow' ? 'approved' : 'denied');
+                  pendingDecisionsRef.current.delete(msg.approvalId);
+                }
               }
-              pendingDecisionsRef.current.delete(msg.approvalId);
             }
             setApprovals(prev => prev.filter(a => a.id !== msg.approvalId));
             break;
@@ -357,8 +367,11 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
   return {
     sessions,
     approvals,
+    approvalsRef,
     sendApproval,
     assetsLoaded,
+    assetError,
+    reconnectCount,
     selectedWorker,
     setSelectedWorker,
     workersRef,

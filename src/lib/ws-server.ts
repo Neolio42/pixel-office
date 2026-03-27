@@ -48,6 +48,17 @@ function ensureMeta(ws: WebSocket): { subscriptions: Set<string> } {
 }
 
 export function initWSS(server: Server) {
+  if (globalThis.__wss) {
+    // Re-register PTY handlers on existing WSS (for HMR)
+    setPtyOutputHandler((ptyId, data) => {
+      sendToSubscribers(ptyId, { type: 'terminal-output', ptyId, data });
+    });
+    setPtyExitHandler((ptyId, exitCode) => {
+      sendToSubscribers(ptyId, { type: 'terminal-exited', ptyId, exitCode });
+    });
+    return;
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   globalThis.__wss = wss;
 
@@ -132,9 +143,7 @@ function handleClientMessage(ws: WebSocket, msg: WSMessageFromClient) {
   switch (msg.type) {
     case 'approval-response': {
       resolveApproval(msg.approvalId, msg.decision, msg.message);
-      // Always broadcast — multiple tabs may have the same toast visible.
-      // If the ID was already resolved, this is harmless (client filters by ID).
-      broadcast({ type: 'approval-resolved', approvalId: msg.approvalId });
+      // Pre-tool-use route broadcasts approval-resolved after the promise resolves.
       break;
     }
 

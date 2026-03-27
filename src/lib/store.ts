@@ -1,10 +1,14 @@
 import { Session, WorkerState } from './types';
 
+const TTY_RE = /^\/dev\/tty[a-zA-Z0-9]+$/;
+
 // Use globalThis so the same sessions Map is shared across
 // Next.js App Router module instances and the custom server.ts
 declare global {
   // eslint-disable-next-line no-var
   var __sessions: Map<string, Session> | undefined;
+  // eslint-disable-next-line no-var
+  var __focusUpdateNeeded: Map<string, boolean> | undefined;
 }
 
 function getSessions(): Map<string, Session> {
@@ -22,7 +26,7 @@ function getNextDeskIndex(): number {
   for (let i = 0; i < MAX_DESKS; i++) {
     if (!taken.has(i)) return i;
   }
-  return 0;
+  return sessions.size % MAX_DESKS;
 }
 
 export function addSession(sessionId: string, cwd: string, tty = '', transcriptPath?: string): Session {
@@ -34,7 +38,7 @@ export function addSession(sessionId: string, cwd: string, tty = '', transcriptP
     state: 'walking',
     currentTool: null,
     cwd,
-    tty: tty.startsWith('/dev/') ? tty : '',
+    tty: TTY_RE.test(tty) ? tty : '',
     startedAt: now,
     lastSeen: now,
     recentTools: [],
@@ -46,7 +50,7 @@ export function addSession(sessionId: string, cwd: string, tty = '', transcriptP
 
 export function updateSessionTty(sessionId: string, tty: string): void {
   const session = getSessions().get(sessionId);
-  if (session && tty && tty.startsWith('/dev/')) {
+  if (session && TTY_RE.test(tty)) {
     session.tty = tty;
   }
 }
@@ -69,6 +73,7 @@ export function cleanupStaleSessions(maxAgeMs = 60_000, isAlivePtyId?: (ptyId: s
       // Don't remove sessions with a live embedded PTY — the terminal is still open
       if (session.ptyId && isAlivePtyId?.(session.ptyId)) continue;
       sessions.delete(id);
+      getFocusUpdateNeeded().delete(id);
       removed.push(id);
     }
   }
@@ -76,6 +81,7 @@ export function cleanupStaleSessions(maxAgeMs = 60_000, isAlivePtyId?: (ptyId: s
 }
 
 export function removeSession(sessionId: string): boolean {
+  getFocusUpdateNeeded().delete(sessionId);
   return getSessions().delete(sessionId);
 }
 
@@ -166,6 +172,18 @@ function getToolSummary(toolName: string, toolInput: Record<string, unknown>): s
       return first ? `${toolName}: ${first.slice(0, 50)}` : toolName;
     }
   }
+}
+
+function getFocusUpdateNeeded(): Map<string, boolean> {
+  if (!globalThis.__focusUpdateNeeded) globalThis.__focusUpdateNeeded = new Map();
+  return globalThis.__focusUpdateNeeded;
+}
+export function setNeedsFocusUpdate(sessionId: string, value: boolean) {
+  if (value) getFocusUpdateNeeded().set(sessionId, true);
+  else getFocusUpdateNeeded().delete(sessionId);
+}
+export function getNeedsFocusUpdate(sessionId: string): boolean {
+  return getFocusUpdateNeeded().get(sessionId) || false;
 }
 
 export function addToolCall(sessionId: string, toolName: string, toolInput: Record<string, unknown>): void {

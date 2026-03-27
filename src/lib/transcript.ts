@@ -1,10 +1,18 @@
 import { access, constants, stat } from 'fs/promises';
+import { homedir } from 'os';
+import { resolve } from 'path';
+
+const CLAUDE_DIR = resolve(homedir(), '.claude');
 
 /**
  * Read the initial user task from a Claude Code JSONL transcript.
  * Reads the first ~20KB, finds the first `type: "user"` entry.
  */
-export async function readTaskFromTranscript(path: string): Promise<string | null> {
+export async function readTaskFromTranscript(transcriptPath: string): Promise<string | null> {
+  const resolvedPath = resolve(transcriptPath);
+  if (!resolvedPath.startsWith(CLAUDE_DIR + '/')) return null;
+
+  const path = resolvedPath;
   try {
     await access(path, constants.R_OK);
   } catch {
@@ -54,7 +62,11 @@ export async function readTaskFromTranscript(path: string): Promise<string | nul
  * Reads the last ~30KB of the file (tail), finds the last `type: "assistant"`
  * entry with text content.
  */
-export async function readLatestAssistantMessage(path: string): Promise<string | null> {
+export async function readLatestAssistantMessage(transcriptPath: string): Promise<string | null> {
+  const resolvedPath = resolve(transcriptPath);
+  if (!resolvedPath.startsWith(CLAUDE_DIR + '/')) return null;
+
+  const path = resolvedPath;
   try {
     await access(path, constants.R_OK);
   } catch {

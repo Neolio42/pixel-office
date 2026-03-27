@@ -1,15 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Session } from '@/lib/types';
-
-const STATE_COLORS: Record<string, string> = {
-  idle: '#444',
-  typing: '#4a7cbf',
-  reading: '#4abf5c',
-  waiting: '#bf8b4a',
-  walking: '#8b4abf',
-};
+import { STATE_COLORS } from '@/lib/ui-constants';
 
 interface Props {
   session: Session;
@@ -23,6 +16,11 @@ interface Props {
 
 export function WorkerPopup({ session, anchorX, anchorY, viewportW, viewportH, onDismiss, onOpenTerminal }: Props) {
   const [focusing, setFocusing] = useState(false);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function handleFocusTerminal() {
     setFocusing(true);

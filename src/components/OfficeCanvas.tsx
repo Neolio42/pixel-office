@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, useReducer } from 'react';
 import { useRecentCwds } from '@/hooks/useRecentCwds';
 import { CANVAS_W, CANVAS_H, TILE_SIZE, SCALE, isWalkable } from '@/game/office-layout';
 import { setManualTarget } from '@/game/worker-entity';
@@ -16,33 +16,60 @@ const MAX_TILES = 3;
 export function OfficeCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const {
-    sessions, approvals, sendApproval, assetsLoaded,
+    sessions, approvals, approvalsRef, sendApproval, assetsLoaded, assetError,
     selectedWorker, setSelectedWorker, workersRef,
     wsRef, ptyTabs, setPtyTabs, spawnSession, spawnError, terminalHandlersRef, onSpawnSuccessRef,
-    interactionRef, gridRef,
+    interactionRef, gridRef, reconnectCount,
   } = usePixelOffice(canvasRef);
   const [popupAnchor, setPopupAnchor] = useState<{ x: number; y: number } | null>(null);
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
 
   // Which ptyIds are pinned to visible tiles (up to MAX_TILES)
-  const [visiblePtyIds, setVisiblePtyIds] = useState<string[]>([]);
-
-  // Sync visible tiles when tabs change
-  useEffect(() => {
-    setVisiblePtyIds(prev => {
-      // Remove any that no longer exist in ptyTabs
-      const filtered = prev.filter(id => ptyTabs.some(t => t.ptyId === id));
-      // Auto-add new tabs if there's room
-      for (const tab of ptyTabs) {
-        if (filtered.length >= MAX_TILES) break;
-        if (!filtered.includes(tab.ptyId)) {
-          filtered.push(tab.ptyId);
+  type TileAction =
+    | { type: 'sync'; tabs: typeof ptyTabs }
+    | { type: 'show'; ptyId: string }
+    | { type: 'hide'; ptyId: string }
+    | { type: 'add'; ptyId: string }
+    | { type: 'reorder'; source: string; target: string };
+  const [visiblePtyIds, dispatchTiles] = useReducer((prev: string[], action: TileAction): string[] => {
+    switch (action.type) {
+      case 'sync': {
+        const filtered = prev.filter(id => action.tabs.some(t => t.ptyId === id));
+        for (const tab of action.tabs) {
+          if (filtered.length >= MAX_TILES) break;
+          if (!filtered.includes(tab.ptyId)) filtered.push(tab.ptyId);
         }
+        if (filtered.length === prev.length && filtered.every((id, i) => prev[i] === id)) return prev;
+        return filtered;
       }
-      if (filtered.length === prev.length && filtered.every((id, i) => prev[i] === id)) return prev;
-      return filtered;
-    });
-  }, [ptyTabs]);
+      case 'show': {
+        if (prev.includes(action.ptyId)) return prev;
+        if (prev.length < MAX_TILES) return [...prev, action.ptyId];
+        return [...prev.slice(0, -1), action.ptyId];
+      }
+      case 'hide':
+        return prev.filter(id => id !== action.ptyId);
+      case 'add': {
+        if (prev.includes(action.ptyId) || prev.length >= MAX_TILES) return prev;
+        return [...prev, action.ptyId];
+      }
+      case 'reorder': {
+        const sourceIdx = prev.indexOf(action.source);
+        const targetIdx = prev.indexOf(action.target);
+        if (targetIdx < 0) return prev;
+        if (sourceIdx < 0) {
+          const next = [...prev];
+          next[targetIdx] = action.source;
+          return next;
+        }
+        const next = [...prev];
+        next[sourceIdx] = action.target;
+        next[targetIdx] = action.source;
+        return next;
+      }
+    }
+  }, []);
+  useEffect(() => { dispatchTiles({ type: 'sync', tabs: ptyTabs }); }, [ptyTabs]);
 
   useEffect(() => {
     const update = () => setViewportSize({ w: window.innerWidth, h: window.innerHeight });
@@ -54,16 +81,12 @@ export function OfficeCanvas() {
   const openTerminal = useCallback((ptyId: string) => {
     // Ensure tab exists in ptyTabs (may have been removed on close)
     setPtyTabs(prev => prev.some(t => t.ptyId === ptyId) ? prev : [...prev, { ptyId, cwd: '', exited: false }]);
-    setVisiblePtyIds(prev => {
-      if (prev.includes(ptyId)) return prev;
-      if (prev.length < MAX_TILES) return [...prev, ptyId];
-      return [...prev.slice(0, -1), ptyId];
-    });
+    dispatchTiles({ type: 'show', ptyId });
   }, [setPtyTabs]);
 
   const closeTerminalTile = useCallback((ptyId: string) => {
     setPtyTabs(prev => prev.filter(t => t.ptyId !== ptyId));
-    setVisiblePtyIds(prev => prev.filter(id => id !== ptyId));
+    dispatchTiles({ type: 'hide', ptyId });
   }, [setPtyTabs]);
 
   const { saveRecent } = useRecentCwds();
@@ -84,6 +107,15 @@ export function OfficeCanvas() {
     };
   }, [saveRecent, onSpawnSuccessRef]);
 
+  const cachedRectRef = useRef<DOMRect | null>(null);
+
+  // Invalidate cached rect on resize
+  useEffect(() => {
+    const onResize = () => { cachedRectRef.current = null; };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Drag-to-swap tile reordering
   const dragSourceRef = useRef<string | null>(null);
 
@@ -99,22 +131,7 @@ export function OfficeCanvas() {
   const handleTileDrop = useCallback((targetPtyId: string) => {
     const sourcePtyId = dragSourceRef.current;
     if (!sourcePtyId || sourcePtyId === targetPtyId) return;
-    setVisiblePtyIds(prev => {
-      const sourceIdx = prev.indexOf(sourcePtyId);
-      const targetIdx = prev.indexOf(targetPtyId);
-      if (targetIdx < 0) return prev;
-      // Source is from panel (not visible) — replace target
-      if (sourceIdx < 0) {
-        const next = [...prev];
-        next[targetIdx] = sourcePtyId;
-        return next;
-      }
-      // Both visible — swap
-      const next = [...prev];
-      next[sourceIdx] = targetPtyId;
-      next[targetIdx] = sourcePtyId;
-      return next;
-    });
+    dispatchTiles({ type: 'reorder', source: sourcePtyId, target: targetPtyId });
     dragSourceRef.current = null;
   }, []);
 
@@ -131,7 +148,7 @@ export function OfficeCanvas() {
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
+    const rect = cachedRectRef.current || (cachedRectRef.current = canvas.getBoundingClientRect());
     const fitScale = Math.min(rect.width / CANVAS_W, rect.height / CANVAS_H);
     const renderedW = CANVAS_W * fitScale;
     const renderedH = CANVAS_H * fitScale;
@@ -277,10 +294,7 @@ export function OfficeCanvas() {
     interactionRef.current.selectedWorkerId = null;
   }, [setSelectedWorker, interactionRef]);
 
-  // ⌘Y keyboard shortcut — approve the oldest pending approval
-  const approvalsRef = useRef(approvals);
-  useEffect(() => { approvalsRef.current = approvals; }, [approvals]);
-
+  // ⌘Y / ⌘N keyboard shortcuts — approve or deny the oldest pending approval
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
@@ -288,10 +302,15 @@ export function OfficeCanvas() {
         const oldest = approvalsRef.current[0];
         if (oldest) sendApproval(oldest.id, 'allow');
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        const oldest = approvalsRef.current[0];
+        if (oldest) sendApproval(oldest.id, 'deny');
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [sendApproval]);
+  }, [sendApproval, approvalsRef]);
 
   // Build the grid tiles: office + terminals + empty slots
   const visibleTabs = visiblePtyIds
@@ -322,9 +341,14 @@ export function OfficeCanvas() {
         <div className={`relative flex items-center justify-center bg-[#0e0e1e] rounded overflow-hidden ${
           totalTiles >= 3 ? '' : totalTiles === 2 ? '' : totalTiles === 0 ? 'col-span-2 row-span-2' : ''
         }`}>
-          {!assetsLoaded && (
+          {!assetsLoaded && !assetError && (
             <div className="absolute inset-0 flex items-center justify-center z-20">
               <span className="text-[#8888aa] font-mono text-sm animate-pulse">Loading assets…</span>
+            </div>
+          )}
+          {assetError && (
+            <div className="absolute inset-0 flex items-center justify-center z-20">
+              <span className="text-[#ff5555] font-mono text-sm">{assetError}</span>
             </div>
           )}
           <canvas
@@ -380,6 +404,7 @@ export function OfficeCanvas() {
             onDragStart={() => handleTileDragStart(tab.ptyId)}
             onDragOver={handleTileDragOver}
             onDrop={() => handleTileDrop(tab.ptyId)}
+            reconnectCount={reconnectCount}
           />
         ))}
 
@@ -389,11 +414,7 @@ export function OfficeCanvas() {
             onSpawn={handleSpawn}
             spawnError={spawnError}
             onDropPty={(ptyId) => {
-              setVisiblePtyIds(prev => {
-                if (prev.includes(ptyId)) return prev;
-                if (prev.length >= MAX_TILES) return prev;
-                return [...prev, ptyId];
-              });
+              dispatchTiles({ type: 'add', ptyId });
             }}
           />
         )}

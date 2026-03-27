@@ -5,11 +5,23 @@ import { readTaskFromTranscript } from '@/lib/transcript';
 import { findPtyByTty, findPtyByCwd, linkSessionToPty } from '@/lib/pty-manager';
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const sessionId = body.session_id;
-  const cwd = body.cwd || '';
-  const tty = body.tty || '';
-  const transcriptPath = body.transcript_path || undefined;
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    try {
+      const raw = await req.text();
+      const sanitized = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+      body = JSON.parse(sanitized);
+    } catch {
+      body = {};
+    }
+  }
+  const sessionId = String(body.session_id || '');
+  if (!sessionId) return NextResponse.json({});
+  const cwd = String(body.cwd || '');
+  const tty = String(body.tty || '');
+  const transcriptPath = body.transcript_path ? String(body.transcript_path) : undefined;
 
   const session = addSession(sessionId, cwd, tty, transcriptPath);
 

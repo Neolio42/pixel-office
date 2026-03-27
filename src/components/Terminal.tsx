@@ -10,14 +10,22 @@ interface TerminalProps {
   ptyId: string;
   wsRef: React.RefObject<WebSocket | null>;
   terminalHandlers: React.RefObject<Map<string, (msg: WSMessageToClient) => void>>;
+  reconnectCount?: number;
 }
 
-export function Terminal({ ptyId, wsRef, terminalHandlers }: TerminalProps) {
+export function Terminal({ ptyId, wsRef, terminalHandlers, reconnectCount }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const subscribedRef = useRef(false);
   const scrollbackReceivedRef = useRef(false);
+
+  // Reset subscription state on WebSocket reconnect so we re-subscribe
+  useEffect(() => {
+    if (reconnectCount === undefined || reconnectCount === 0) return;
+    subscribedRef.current = false;
+    scrollbackReceivedRef.current = false;
+  }, [reconnectCount]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -148,7 +156,7 @@ export function Terminal({ ptyId, wsRef, terminalHandlers }: TerminalProps) {
       resizeObserver.disconnect();
       onDataDisposable.dispose();
     };
-  }, [ptyId, wsRef, terminalHandlers]);
+  }, [ptyId, wsRef, terminalHandlers, reconnectCount]);
 
   // Clean up when ptyId changes or component truly unmounts
   useEffect(() => {

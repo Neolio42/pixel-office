@@ -14,8 +14,6 @@ export interface Session {
   currentFocus?: string;
   transcriptPath?: string;
   inPlanMode?: boolean;
-  /** Set by UserPromptSubmit, cleared after first PreToolUse reads transcript. */
-  needsFocusUpdate?: boolean;
   /** Present if this session was spawned by Pixel Office's embedded terminal. */
   ptyId?: string;
 }

@@ -1,19 +1,21 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 
 const STORAGE_KEY = 'pixel-office-recent-cwds';
 const MAX_RECENTS = 10;
 
-export function useRecentCwds() {
-  const [recents, setRecents] = useState<string[]>([]);
+function loadRecents(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    if (Array.isArray(stored)) return stored;
+  } catch { /* ignore */ }
+  return [];
+}
 
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      if (Array.isArray(stored)) setRecents(stored);
-    } catch { /* ignore */ }
-  }, []);
+export function useRecentCwds() {
+  const [recents, setRecents] = useState(loadRecents);
 
   const saveRecent = useCallback((cwd: string) => {
     setRecents(prev => {

@@ -1,63 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
-import { getSession, addSession, updateSession, updateSessionTty, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus } from '@/lib/store';
+import { getSession, addSession, updateSession, updateSessionTty, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus, getNeedsFocusUpdate, setNeedsFocusUpdate } from '@/lib/store';
 import { classifyTool } from '@/lib/tool-classifier';
-import { createApproval } from '@/lib/approval-queue';
+import { createApproval, resolveApproval } from '@/lib/approval-queue';
 import { broadcast, hasConnectedClients } from '@/lib/ws-server';
 import { readTaskFromTranscript, readLatestAssistantMessage } from '@/lib/transcript';
-
-/**
- * Extract a focus title from Claude's assistant response text.
- * Claude's first sentence typically states what it's going to do:
- *   "Let me fix the heuristic extraction..." → "Fix the heuristic extraction"
- *   "I'll update the WorkerPanel component" → "Update the WorkerPanel component"
- */
-/** Action verbs — things Claude says it's DOING. Matches verb roots + suffixes (fixing, edited, etc). */
-const ACTION_RE = /\b(fix|add|remove|delet|creat|updat|build|clean|mak|implement|refactor|debug|check|test|writ|mov|renam|chang|set|configur|deploy|push|install|upgrad|migrat|convert|pars|extract|handl|show|hid|enabl|disabl|run|start|stop|appl|us|open|clos|review|audit|verif|ensur|improv|optimiz|rewrit|redesign|simplif|merg|split|connect|wir|hook|scaffold|setup|integrat|strip|display|render|put|read|edit|search|reload|restart|clear|address|increas|bump|simulat|forc)\w*\b/i;
-
-function extractFocusFromAssistant(text: string): string | null {
-  // Split into sentences (by newlines and punctuation), scan first ~8
-  const sentences = text.split(/(?<=[.!?\n])\s+/).slice(0, 8);
-
-  const STRIP = [
-    /^(let me|I'll|I will|I'm going to|I need to|I want to|I should|I can)\s+/i,
-    /^(now |first |here's what|okay |ok |sure |right |alright |also )/i,
-    /^(let's |we'll |we need to |we should )/i,
-    /^(you're right\.?\s*)/i,
-    /^(good news:?\s*)/i,
-    /^(I'?m sorry\.?\s*)/i,
-  ];
-
-  // Skip patterns — observations, not actions
-  const SKIP = /^(here|the |this |that |there |it |I see|I can see|looking at|based on|but |so |and |two |one |a |an |for |with |since |because |if |when |after |before |no |yes |not )/i;
-
-  for (const sent of sentences) {
-    let s = sent.trim();
-    if (s.length < 10) continue;
-    if (SKIP.test(s) && !ACTION_RE.test(s.slice(0, 40))) continue;
-
-    // Strip assistant-style prefixes
-    for (const p of STRIP) {
-      s = s.replace(p, '');
-    }
-    s = s.trim();
-
-    if (s.length < 12) continue;
-    // After stripping, must contain an action verb
-    if (!ACTION_RE.test(s.slice(0, 50))) continue;
-
-    // Clean up
-    s = s.replace(/[.!:]+$/, '').replace(/\s*[—–\-]\s*$/, '').trim();
-
-    // Capitalize
-    if (s.length > 0) s = s[0].toUpperCase() + s.slice(1);
-
-    if (s.length < 10) continue;
-    return s;
-  }
-
-  return null;
-}
+import { extractFocusFromAssistant } from '@/lib/text-utils';
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -110,8 +58,8 @@ export async function POST(req: NextRequest) {
   }
 
   // If UserPromptSubmit flagged a focus update, read the latest assistant message
-  if (existingSession?.needsFocusUpdate && (transcriptPath || existingSession.transcriptPath)) {
-    existingSession.needsFocusUpdate = false;
+  if (existingSession && getNeedsFocusUpdate(sessionId) && (transcriptPath || existingSession.transcriptPath)) {
+    setNeedsFocusUpdate(sessionId, false);
     const tp = transcriptPath || existingSession.transcriptPath;
     if (tp) {
       readLatestAssistantMessage(tp).then((text) => {
@@ -197,7 +145,18 @@ export async function POST(req: NextRequest) {
   });
 
   console.log(`[Hook] Awaiting approval for ${toolName} (${reason}) in session ${sessionId}`);
-  const result = await promise;
+  let orphanInterval: ReturnType<typeof setInterval>;
+  const orphanCheck = new Promise<{ decision: 'deny'; message: string }>((resolve) => {
+    orphanInterval = setInterval(() => {
+      if (!hasConnectedClients()) {
+        clearInterval(orphanInterval);
+        resolveApproval(approval.id, 'deny', 'No browser connected');
+        resolve({ decision: 'deny', message: 'No browser connected' });
+      }
+    }, 3000);
+  });
+  const result = await Promise.race([promise, orphanCheck]);
+  clearInterval(orphanInterval!);
   console.log(`[Hook] Decision for ${toolName}: ${result.decision}${result.message ? ` — "${result.message}"` : ''}`);
 
   // Always broadcast resolution — covers timeout, disconnect-denial, and normal paths.

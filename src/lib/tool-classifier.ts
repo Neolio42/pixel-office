@@ -26,7 +26,7 @@ const SAFE_COMMANDS = new Set([
   'python', 'python3', 'cargo', 'go', 'rustc', 'gcc', 'g++', 'make', 'cmake',
   'mkdir', 'touch', 'ln',
   'tar', 'zip', 'unzip', 'gzip', 'gunzip',
-  'jq', 'yq', 'xargs', 'tee', 'diff', 'patch',
+  'jq', 'yq', 'xargs', 'diff', 'patch',
   'curl', 'wget', 'http',
   'sleep', 'true', 'false', 'test', '[',
   'printf', 'read', 'set', 'export', 'source', '.',
@@ -143,6 +143,37 @@ function classifySingleCommand(args: string[]): ClassificationReason {
   // Variable expansion — can't know what it resolves to
   if (base.startsWith('$') || base === '__VAR_EXPANSION__') return 'unknown';
 
+  // Fix 1: Interpreter eval flag bypass — node -e, python -c, etc. can run arbitrary code
+  const CODE_INTERPRETERS = new Set(['node', 'python', 'python3', 'perl', 'ruby', 'deno', 'bun']);
+  const EVAL_FLAGS = new Set(['-e', '-c', '--eval', '--print', '-p']);
+  if (CODE_INTERPRETERS.has(base) && args.some(a => EVAL_FLAGS.has(a))) {
+    return 'unknown';
+  }
+
+  // Fix 2: sed -i modifies files in-place — destructive
+  if (base === 'sed' && args.some(a => a === '-i' || a.startsWith('-i'))) return 'risky';
+
+  // Fix 3: find -delete and find -exec are destructive
+  if (base === 'find' && args.some(a => a === '-delete' || a === '-exec' || a === '-execdir')) return 'risky';
+
+  // Fix 4: curl/wget data upload/exfiltration flags
+  if (base === 'curl') {
+    if (args.some(a =>
+      a === '-d' || a === '--data' || a === '--data-binary' || a === '--data-raw' ||
+      a === '--data-urlencode' || a === '-F' || a === '--form' ||
+      a === '-T' || a === '--upload-file'
+    )) return 'risky';
+    const xIdx = args.findIndex(a => a === '-X' || a === '--request');
+    if (xIdx >= 0) {
+      const method = args[xIdx + 1]?.toUpperCase();
+      if (method && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') return 'risky';
+    }
+  }
+  if (base === 'wget' && args.some(a => a === '--post-data' || a === '--post-file')) return 'risky';
+
+  // Fix 6: tee can overwrite arbitrary files
+  if (base === 'tee') return 'unknown';
+
   // Check deny list first (deny > allow)
   if (RISKY_COMMANDS.has(base)) return 'risky';
 
@@ -219,9 +250,11 @@ function classifySingleCommand(args: string[]): ClassificationReason {
     return 'unknown'; // can't easily parse the inner command
   }
 
-  // cp/mv — can overwrite files, but are common enough to allow
-  // (rm is the destructive one in RISKY_COMMANDS)
-  if (base === 'cp' || base === 'mv') return 'safe';
+  // Fix 5: cp/mv — safe unless forced (which suppresses overwrite prompts)
+  if (base === 'cp' || base === 'mv') {
+    if (args.some(a => a === '-f' || a === '--force' || a === '-rf' || a === '-Rf')) return 'risky';
+    return 'safe';
+  }
 
   // Check safe list
   if (SAFE_COMMANDS.has(base)) return 'safe';
@@ -268,7 +301,7 @@ function classifyBashCommand(command: string): { needsApproval: boolean; reason:
 // MCP tool patterns — checked anywhere in the action name (not just start)
 // because many MCP tools prefix actions with their server name (e.g. gmail_create_draft, n8n_delete_workflow)
 const SAFE_MCP_ACTIONS = /(^|_)(get|list|read|find|search|describe|show|view|count|check|fetch|browse|tabs_context)(_|$)/;
-const RISKY_MCP_ACTIONS = /(^|_)(delete|remove|drop|destroy|execute|javascript|computer|send|create|update|modify|edit|write|upload|publish)(_|$)/;
+const RISKY_MCP_ACTIONS = /(^|_)(delete|remove|drop|destroy|execute|javascript|computer|send|create|update|modify|edit|write|upload|publish|run|invoke|apply|trigger|call|patch|deploy|post|put)(_|$)/;
 
 export function classifyTool(toolName: string, toolInput: Record<string, unknown>): Classification {
   // MCP tools — classify by action pattern instead of blanket approve
@@ -283,9 +316,8 @@ export function classifyTool(toolName: string, toolInput: Record<string, unknown
     if (SAFE_MCP_ACTIONS.test(action)) {
       return { state: 'reading', needsApproval: false, reason: 'safe' };
     }
-    // Unknown MCP action — auto-approve with 'unknown' reason
-    // (most MCP tools are benign, and requiring approval for all would be noisy)
-    return { state: 'typing', needsApproval: false, reason: 'unknown' };
+    // Unknown MCP action — ask boss
+    return { state: 'typing', needsApproval: true, reason: 'unknown' };
   }
 
   if (READING_TOOLS.has(toolName)) {

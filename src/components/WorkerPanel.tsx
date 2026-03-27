@@ -3,14 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Session } from '@/lib/types';
 import { useRecentCwds } from '@/hooks/useRecentCwds';
-
-const STATE_COLORS: Record<string, string> = {
-  idle: '#444',
-  typing: '#4a7cbf',
-  reading: '#4abf5c',
-  waiting: '#bf8b4a',
-  walking: '#8b4abf',
-};
+import { STATE_COLORS } from '@/lib/ui-constants';
 
 const STATE_ICONS: Record<string, string> = {
   idle: '·',
@@ -49,6 +42,7 @@ export function WorkerPanel({ sessions, visiblePtyIds, onSelectWorker, onOpenTer
   const [focusing, setFocusing] = useState<string | null>(null);
   const [showSpawnInput, setShowSpawnInput] = useState(false);
   const [spawnCwd, setSpawnCwd] = useState('');
+  const [, setTick] = useState(0);
   const { recents: recentCwds } = useRecentCwds();
   // Track which sessions just appeared for slide-in animation
   const knownSessionsRef = useRef<Set<string>>(new Set());
@@ -95,6 +89,11 @@ export function WorkerPanel({ sessions, visiblePtyIds, onSelectWorker, onOpenTer
       return () => clearTimeout(timer);
     }
   }, [sessions]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   function handleClick(sessionId: string) {
     const next = expandedId === sessionId ? null : sessionId;

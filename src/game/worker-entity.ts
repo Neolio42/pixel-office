@@ -1,8 +1,6 @@
 import { WorkerState } from '@/lib/types';
-import { FRAMES, FRAME_DURATIONS, AnimState } from './sprites';
+import { type FacingDir, FRAME_COUNTS, FRAME_DURATIONS, AnimState } from './sprites';
 import { DESK_POSITIONS, DOOR_X, DOOR_Y, TILE_SIZE, SCALE } from './office-layout';
-
-export type FacingDir = 'down' | 'up' | 'right' | 'left';
 
 export type EmoteType = 'approved' | 'denied' | 'error' | 'done';
 
@@ -24,8 +22,6 @@ export interface WorkerEntity {
   arrived: boolean;       // has initially arrived at desk
   inBreakRoom: boolean;   // currently heading to or at break room
   inMeetingRoom: boolean; // currently heading to or at meeting room (plan mode)
-  // Client-side idle detection
-  lastToolTime: number; // Date.now() of last active tool call
   // Drag-to-move: user manually set a target, skip auto break room/meeting room until arrival
   manualTarget: boolean;
   // Floating emote above worker (approval granted, denied, etc)
@@ -74,7 +70,6 @@ export function createWorker(sessionId: string, deskIndex: number): WorkerEntity
     arrived: false,
     inBreakRoom: false,
     inMeetingRoom: false,
-    lastToolTime: Date.now(),
     manualTarget: false,
     emote: null,
     idleTimer: 0,
@@ -187,8 +182,7 @@ export function updateWorker(worker: WorkerEntity, dt: number): boolean {
   worker.frameTimer += dt * 1000;
   if (worker.frameTimer >= duration) {
     worker.frameTimer -= duration;
-    const frames = FRAMES[worker.state];
-    worker.frameIndex = (worker.frameIndex + 1) % frames.length;
+    worker.frameIndex = (worker.frameIndex + 1) % FRAME_COUNTS[worker.state];
   }
 
   return false;
@@ -220,7 +214,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       return;
     }
 
-    if (state === 'idle' && !worker.inBreakRoom) {
+    if (state === 'idle' && !worker.inBreakRoom && !worker.manualTarget) {
       // Go to break room — pick a spot based on desk index
       const spot = BREAK_ROOM_SPOTS[worker.deskIndex % BREAK_ROOM_SPOTS.length];
       worker.targetX = spot.x;

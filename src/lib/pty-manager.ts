@@ -1,5 +1,5 @@
 import { spawn as ptySpawn, IPty } from 'node-pty';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 /** Resolve full path to claude binary so node-pty can find it regardless of server PATH */
 function resolveClaudePath(): string {
@@ -15,7 +15,7 @@ function resolveClaudePath(): string {
   try {
     // Use login shell to source PATH properly
     const shell = process.env.SHELL || '/bin/zsh';
-    return execSync(`${shell} -lc "which claude"`, { encoding: 'utf8' }).trim();
+    return execFileSync(shell, ['-lc', 'which claude'], { encoding: 'utf8' }).trim();
   } catch { /* continue */ }
   return 'claude';
 }
@@ -135,11 +135,11 @@ export function spawnSession(cwd: string, cols = 120, rows = 30): PtyEntry {
   pty.onData((data: string) => {
     // Buffer scrollback
     entry.scrollback.push(data);
-    entry.scrollbackBytes += data.length;
+    entry.scrollbackBytes += Buffer.byteLength(data, 'utf8');
     // Trim if over cap
     while (entry.scrollbackBytes > MAX_SCROLLBACK_BYTES && entry.scrollback.length > 0) {
       const removed = entry.scrollback.shift()!;
-      entry.scrollbackBytes -= removed.length;
+      entry.scrollbackBytes -= Buffer.byteLength(removed, 'utf8');
     }
     if (entry.scrollback.length === 0) entry.scrollbackBytes = 0;
     // Send to subscribers

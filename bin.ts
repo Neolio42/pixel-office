@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json');
 const CLAUDE_DIR = join(homedir(), '.claude');
@@ -83,7 +83,7 @@ function registerHooks(): void {
 
 function openBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-  exec(`${cmd} ${url}`);
+  execFile(cmd, [url], () => {});
 }
 
 async function main(): Promise<void> {
@@ -104,9 +104,8 @@ async function main(): Promise<void> {
   // Start the server
   const { createServer } = await import('http');
   const next = (await import('next')).default;
-  const { initWSS, broadcast } = await import('./src/lib/ws-server');
-  const { cleanupStaleSessions, getAllSessions } = await import('./src/lib/store');
-  const { getAllPtyEntries, killPty } = await import('./src/lib/pty-manager');
+  const { initWSS } = await import('./src/lib/ws-server');
+  const { startStaleSessionCleanup } = await import('./src/lib/cleanup');
 
   const dev = process.env.NODE_ENV !== 'production';
   const port = parseInt(process.env.PORT || '3000', 10);
@@ -122,33 +121,9 @@ async function main(): Promise<void> {
 
   initWSS(server);
 
-  // Stale session cleanup (same as server.ts)
-  if (!globalThis.__staleSessionCleanup) {
-    globalThis.__staleSessionCleanup = setInterval(() => {
-      const isAlivePty = (ptyId: string) => {
-        const e = getAllPtyEntries().find((p) => p.ptyId === ptyId);
-        return !!e && !e.exited;
-      };
-      const removed = cleanupStaleSessions(30 * 60_000, isAlivePty);
-      for (const sessionId of removed) {
-        console.log(`[cleanup] Removed stale session: ${sessionId}`);
-        broadcast({ type: 'session-remove', sessionId });
-      }
-      const activePtyIds = new Set(
-        getAllSessions()
-          .filter((s) => s.ptyId)
-          .map((s) => s.ptyId!)
-      );
-      for (const entry of getAllPtyEntries()) {
-        if (!activePtyIds.has(entry.ptyId) && entry.exited) {
-          killPty(entry.ptyId);
-          console.log(`[cleanup] Removed orphaned PTY: ${entry.ptyId}`);
-        }
-      }
-    }, 5 * 60_000);
-  }
+  startStaleSessionCleanup();
 
-  server.listen(port, () => {
+  server.listen(port, '127.0.0.1', () => {
     console.log(`  ✓ Ready on http://localhost:${port}`);
     console.log('  Open a Claude Code terminal — a worker will appear.');
     console.log('');

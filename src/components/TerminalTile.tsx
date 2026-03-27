@@ -17,6 +17,7 @@ interface TerminalTileProps {
   onDragStart?: () => void;
   onDragOver?: (e: React.DragEvent) => void;
   onDrop?: () => void;
+  reconnectCount?: number;
 }
 
 function projectName(cwd: string): string {
@@ -35,7 +36,7 @@ function stateColor(session: Session | undefined, exited: boolean): string {
   }
 }
 
-export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, onSpawnHere, onDragStart, onDragOver, onDrop }: TerminalTileProps) {
+export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, onSpawnHere, onDragStart, onDragOver, onDrop, reconnectCount }: TerminalTileProps) {
   const name = projectName(tab.cwd);
   const color = stateColor(session, tab.exited);
   const isActive = session && !tab.exited && session.state !== 'idle';
@@ -70,6 +71,8 @@ export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, o
             <span className="text-[#bf8b4a] text-[9px] font-mono mr-2">Approval</span>
           )}
           <button
+            draggable={false}
+            onMouseDown={e => e.stopPropagation()}
             className="text-[#222] hover:text-[#888] text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
             onClick={onClose}
           >
@@ -85,7 +88,7 @@ export function TerminalTile({ tab, session, wsRef, terminalHandlers, onClose, o
 
       {/* Terminal */}
       <div className="flex-1 min-h-0 bg-[#0e0e1e]">
-        <Terminal ptyId={tab.ptyId} wsRef={wsRef} terminalHandlers={terminalHandlers} />
+        <Terminal ptyId={tab.ptyId} wsRef={wsRef} terminalHandlers={terminalHandlers} reconnectCount={reconnectCount} />
       </div>
     </div>
   );

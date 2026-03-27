@@ -16,6 +16,10 @@ export async function POST(req: NextRequest) {
   }
 
   const tty = session.tty; // e.g. /dev/ttys003
+  const TTY_RE = /^\/dev\/tty[a-zA-Z0-9]+$/;
+  if (!tty || !TTY_RE.test(tty)) {
+    return NextResponse.json({ error: 'Invalid tty' }, { status: 400 });
+  }
 
   try {
     if (tty) {
