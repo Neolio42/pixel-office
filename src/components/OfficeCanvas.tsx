@@ -2,7 +2,8 @@
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { useRecentCwds } from '@/hooks/useRecentCwds';
-import { CANVAS_W, CANVAS_H, TILE_SIZE, SCALE } from '@/game/office-layout';
+import { CANVAS_W, CANVAS_H, TILE_SIZE, SCALE, isWalkable } from '@/game/office-layout';
+import { setManualTarget } from '@/game/worker-entity';
 import { usePixelOffice } from '@/hooks/usePixelOffice';
 import { WorkerPanel } from './WorkerPanel';
 import { ApprovalToast } from './ApprovalToast';
@@ -18,6 +19,7 @@ export function OfficeCanvas() {
     sessions, approvals, sendApproval, assetsLoaded,
     selectedWorker, setSelectedWorker, workersRef,
     wsRef, ptyTabs, setPtyTabs, spawnSession, spawnError, terminalHandlersRef, onSpawnSuccessRef,
+    interactionRef, gridRef,
   } = usePixelOffice(canvasRef);
   const [popupAnchor, setPopupAnchor] = useState<{ x: number; y: number } | null>(null);
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
@@ -116,35 +118,36 @@ export function OfficeCanvas() {
     dragSourceRef.current = null;
   }, []);
 
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // ── Canvas mouse interaction: hover, click, drag ─────────────────────────
+  const dragStateRef = useRef<{
+    workerId: string;
+    startClientX: number;
+    startClientY: number;
+    isDragging: boolean; // true once moved > threshold
+  } | null>(null);
+  const [canvasCursor, setCanvasCursor] = useState<'default' | 'pointer' | 'grabbing'>('default');
+
+  /** Convert client coords to logical canvas coords and tile coords */
+  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const displayW = rect.width;
-    const displayH = rect.height;
-
-    const scaleX = displayW / CANVAS_W;
-    const scaleY = displayH / CANVAS_H;
-    const fitScale = Math.min(scaleX, scaleY);
-
+    const fitScale = Math.min(rect.width / CANVAS_W, rect.height / CANVAS_H);
     const renderedW = CANVAS_W * fitScale;
     const renderedH = CANVAS_H * fitScale;
-    const offsetX = (displayW - renderedW) / 2;
-    const offsetY = (displayH - renderedH) / 2;
+    const offsetX = (rect.width - renderedW) / 2;
+    const offsetY = (rect.height - renderedH) / 2;
+    const logicalX = (clientX - rect.left - offsetX) / fitScale;
+    const logicalY = (clientY - rect.top - offsetY) / fitScale;
+    const T = TILE_SIZE * SCALE;
+    return { logicalX, logicalY, tileX: logicalX / T, tileY: logicalY / T, rect, fitScale, offsetX, offsetY };
+  }, [canvasRef]);
 
-    const clickX = e.clientX - rect.left - offsetX;
-    const clickY = e.clientY - rect.top - offsetY;
-
-    const logicalX = clickX / fitScale;
-    const logicalY = clickY / fitScale;
-    const tileX = logicalX / (TILE_SIZE * SCALE);
-    const tileY = logicalY / (TILE_SIZE * SCALE);
-
+  /** Hit-test workers at tile coords */
+  const hitTestWorker = useCallback((tileX: number, tileY: number): string | null => {
     const CLICK_RADIUS = 1.5;
     let closest: string | null = null;
     let closestDist = CLICK_RADIUS;
-
     for (const [id, worker] of workersRef.current) {
       const dist = Math.sqrt((worker.x - tileX) ** 2 + (worker.y - tileY) ** 2);
       if (dist < closestDist) {
@@ -152,25 +155,127 @@ export function OfficeCanvas() {
         closest = id;
       }
     }
+    return closest;
+  }, [workersRef]);
 
-    if (closest) {
-      setSelectedWorker(closest);
-      const worker = workersRef.current.get(closest)!;
-      const workerLogicalX = worker.x * TILE_SIZE * SCALE;
-      const workerLogicalY = worker.y * TILE_SIZE * SCALE;
-      const vpX = rect.left + offsetX + workerLogicalX * fitScale;
-      const vpY = rect.top + offsetY + workerLogicalY * fitScale;
-      setPopupAnchor({ x: vpX, y: vpY });
-    } else {
-      setSelectedWorker(null);
-      setPopupAnchor(null);
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const coords = clientToCanvas(e.clientX, e.clientY);
+    if (!coords) return;
+    const hit = hitTestWorker(coords.tileX, coords.tileY);
+    if (hit) {
+      dragStateRef.current = {
+        workerId: hit,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        isDragging: false,
+      };
+      e.preventDefault();
     }
-  }, [workersRef, setSelectedWorker, sessions]);
+  }, [clientToCanvas, hitTestWorker]);
+
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const coords = clientToCanvas(e.clientX, e.clientY);
+    if (!coords) return;
+
+    const drag = dragStateRef.current;
+    if (drag) {
+      const dx = e.clientX - drag.startClientX;
+      const dy = e.clientY - drag.startClientY;
+      if (!drag.isDragging && dx * dx + dy * dy > 16) {
+        drag.isDragging = true;
+        setCanvasCursor('grabbing');
+        interactionRef.current.hoveredWorkerId = null; // clear hover on drag start
+      }
+      if (drag.isDragging) {
+        // Update interaction ref for renderer (mutate in place — no spread)
+        const tileXi = Math.floor(coords.tileX);
+        const tileYi = Math.floor(coords.tileY);
+        const walkable = isWalkable(tileXi, tileYi, gridRef.current);
+        interactionRef.current.drag = {
+          workerId: drag.workerId,
+          cursorX: coords.logicalX,
+          cursorY: coords.logicalY,
+        };
+        interactionRef.current.dropTile = walkable ? { tx: tileXi, ty: tileYi } : null;
+        return;
+      }
+    }
+
+    // Hover hit-testing (not dragging)
+    const hit = hitTestWorker(coords.tileX, coords.tileY);
+    interactionRef.current.hoveredWorkerId = hit;
+    setCanvasCursor(hit ? 'pointer' : 'default');
+  }, [clientToCanvas, hitTestWorker, interactionRef, gridRef]);
+
+  /** Shared cleanup for drag end — called from canvas mouseup and window mouseup */
+  const clearDrag = useCallback(() => {
+    dragStateRef.current = null;
+    interactionRef.current.drag = null;
+    interactionRef.current.dropTile = null;
+    setCanvasCursor('default');
+  }, [interactionRef]);
+
+  const handleCanvasMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const drag = dragStateRef.current;
+    clearDrag();
+
+    if (!drag) return;
+
+    const coords = clientToCanvas(e.clientX, e.clientY);
+    if (!coords) return;
+
+    if (drag.isDragging) {
+      // Drop — set manual walk target
+      const tileXi = Math.floor(coords.tileX);
+      const tileYi = Math.floor(coords.tileY);
+      if (isWalkable(tileXi, tileYi, gridRef.current)) {
+        const worker = workersRef.current.get(drag.workerId);
+        if (worker) setManualTarget(worker, tileXi, tileYi);
+      }
+    } else {
+      // Short click — select/deselect worker (show popup)
+      const hit = hitTestWorker(coords.tileX, coords.tileY);
+      if (hit) {
+        setSelectedWorker(hit);
+        interactionRef.current.selectedWorkerId = hit;
+        const worker = workersRef.current.get(hit);
+        if (!worker) return;
+        const workerLogicalX = worker.x * TILE_SIZE * SCALE;
+        const workerLogicalY = worker.y * TILE_SIZE * SCALE;
+        const vpX = coords.rect.left + coords.offsetX + workerLogicalX * coords.fitScale;
+        const vpY = coords.rect.top + coords.offsetY + workerLogicalY * coords.fitScale;
+        setPopupAnchor({ x: vpX, y: vpY });
+      } else {
+        setSelectedWorker(null);
+        setPopupAnchor(null);
+        interactionRef.current.selectedWorkerId = null;
+      }
+    }
+  }, [clientToCanvas, hitTestWorker, workersRef, setSelectedWorker, interactionRef, gridRef, clearDrag]);
+
+  const handleCanvasMouseLeave = useCallback(() => {
+    if (!dragStateRef.current?.isDragging) {
+      interactionRef.current.hoveredWorkerId = null;
+      setCanvasCursor('default');
+    }
+  }, [interactionRef]);
+
+  // Global mouseup listener — catches drag releases outside the canvas
+  useEffect(() => {
+    const handler = () => {
+      if (dragStateRef.current?.isDragging) {
+        clearDrag();
+      }
+    };
+    window.addEventListener('mouseup', handler);
+    return () => window.removeEventListener('mouseup', handler);
+  }, [clearDrag]);
 
   const handleDismissPopup = useCallback(() => {
     setSelectedWorker(null);
     setPopupAnchor(null);
-  }, [setSelectedWorker]);
+    interactionRef.current.selectedWorkerId = null;
+  }, [setSelectedWorker, interactionRef]);
 
   // ⌘Y keyboard shortcut — approve the oldest pending approval
   const approvalsRef = useRef(approvals);
@@ -226,9 +331,12 @@ export function OfficeCanvas() {
             ref={canvasRef}
             width={CANVAS_W}
             height={CANVAS_H}
-            className="max-w-full max-h-full object-contain cursor-pointer"
-            style={{ imageRendering: 'pixelated', opacity: assetsLoaded ? 1 : 0 }}
-            onClick={handleCanvasClick}
+            className="max-w-full max-h-full object-contain"
+            style={{ imageRendering: 'pixelated', opacity: assetsLoaded ? 1 : 0, cursor: canvasCursor }}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onMouseLeave={handleCanvasMouseLeave}
           />
           {/* Approval toasts */}
           <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-30">

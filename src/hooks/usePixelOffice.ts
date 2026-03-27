@@ -4,8 +4,9 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { Session, WSMessageToClient } from '@/lib/types';
 import { buildGrid } from '@/game/office-layout';
 import { renderOffice, initRenderer } from '@/game/renderer';
-import { WorkerEntity, createWorker, updateWorker, setWorkerState, setWorkerPlanMode, startLeaving } from '@/game/worker-entity';
+import { WorkerEntity, createWorker, updateWorker, setWorkerState, setWorkerPlanMode, startLeaving, triggerEmote } from '@/game/worker-entity';
 import { loadAssets, AssetBundle } from '@/game/asset-loader';
+import { CanvasInteraction } from '@/game/renderer';
 
 /** Get the speech bubble text from the session's most recent tool summary. Truncates to ~25 chars at word boundary. */
 function bubbleText(session: Session): string | null {
@@ -78,9 +79,21 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
   const initialSyncDoneRef = useRef(false);
   /** Called on successful spawn — used by UI to save recents only on success */
   const onSpawnSuccessRef = useRef<((ptyId: string) => void) | null>(null);
+  /** Canvas interaction state — written by OfficeCanvas, read by game loop */
+  const interactionRef = useRef<CanvasInteraction>({
+    hoveredWorkerId: null,
+    selectedWorkerId: null,
+    drag: null,
+    dropTile: null,
+  });
+  /** Track pending approval decisions client-side for emote triggering */
+  const pendingDecisionsRef = useRef<Map<string, 'allow' | 'deny'>>(new Map());
+  /** Ref mirror of approvals state for use inside WS closure */
+  const approvalsRef = useRef<ApprovalRequest[]>([]);
 
   const sendApproval = useCallback((approvalId: string, decision: 'allow' | 'deny', message?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      pendingDecisionsRef.current.set(approvalId, decision);
       wsRef.current.send(JSON.stringify({
         type: 'approval-response',
         approvalId,
@@ -92,6 +105,9 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
       console.warn('[WS] Cannot send approval — WebSocket not open');
     }
   }, []);
+
+  // Keep approvalsRef in sync with state
+  useEffect(() => { approvalsRef.current = approvals; }, [approvals]);
 
   const spawnSession = useCallback((cwd: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -190,7 +206,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             if (!workers.has(s.sessionId)) {
               workers.set(s.sessionId, createWorker(s.sessionId, s.deskIndex));
             }
-            const worker = workers.get(s.sessionId)!;
+            const worker = workers.get(s.sessionId);
+            if (!worker) break;
             setWorkerState(worker, s.state);
             setWorkerPlanMode(worker, !!s.inPlanMode);
             if (s.state === 'waiting') {
@@ -216,6 +233,11 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             setSessions(prev => prev.filter(s => s.sessionId !== msg.sessionId));
             const worker = workersRef.current.get(msg.sessionId);
             if (worker) startLeaving(worker);
+            // Clear drag if this worker was being dragged
+            if (interactionRef.current.drag?.workerId === msg.sessionId) {
+              interactionRef.current.drag = null;
+              interactionRef.current.dropTile = null;
+            }
             break;
           }
           case 'approval-request': {
@@ -226,6 +248,17 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
             break;
           }
           case 'approval-resolved': {
+            // Trigger emote on the worker
+            const resolvedApproval = approvalsRef.current.find(a => a.id === msg.approvalId);
+            const decision = pendingDecisionsRef.current.get(msg.approvalId);
+            if (resolvedApproval && decision) {
+              const worker = workersRef.current.get(resolvedApproval.sessionId);
+              if (worker) {
+                triggerEmote(worker, decision === 'allow' ? 'approved' : 'denied');
+                worker.speechBubble = null; // clear approval label
+              }
+              pendingDecisionsRef.current.delete(msg.approvalId);
+            }
             setApprovals(prev => prev.filter(a => a.id !== msg.approvalId));
             break;
           }
@@ -296,7 +329,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     if (!ctx) return;
 
     const loop = (time: number) => {
-      const dt = lastTimeRef.current ? (time - lastTimeRef.current) / 1000 : 0.016;
+      const rawDt = lastTimeRef.current ? (time - lastTimeRef.current) / 1000 : 0.016;
+      const dt = Math.min(rawDt, 1 / 15); // cap to prevent drift on tab re-focus
       lastTimeRef.current = time;
 
       // Update workers
@@ -309,8 +343,8 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
         workersRef.current.delete(id);
       }
 
-      // Render
-      renderOffice(ctx, gridRef.current, [...workersRef.current.values()], dt);
+      // Render with interaction state
+      renderOffice(ctx, gridRef.current, [...workersRef.current.values()], dt, interactionRef.current);
 
       animFrameRef.current = requestAnimationFrame(loop);
     };
@@ -335,5 +369,7 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     spawnError,
     terminalHandlersRef,
     onSpawnSuccessRef,
+    interactionRef,
+    gridRef,
   };
 }

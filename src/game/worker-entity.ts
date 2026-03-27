@@ -4,6 +4,8 @@ import { DESK_POSITIONS, DOOR_X, DOOR_Y, TILE_SIZE, SCALE } from './office-layou
 
 export type FacingDir = 'down' | 'up' | 'right' | 'left';
 
+export type EmoteType = 'approved' | 'denied' | 'error' | 'done';
+
 export interface WorkerEntity {
   sessionId: string;
   deskIndex: number;
@@ -24,6 +26,13 @@ export interface WorkerEntity {
   inMeetingRoom: boolean; // currently heading to or at meeting room (plan mode)
   // Client-side idle detection
   lastToolTime: number; // Date.now() of last active tool call
+  // Drag-to-move: user manually set a target, skip auto break room/meeting room until arrival
+  manualTarget: boolean;
+  // Floating emote above worker (approval granted, denied, etc)
+  emote: { type: EmoteType; timer: number; maxTimer: number } | null;
+  // Break room idle behavior
+  idleTimer: number;
+  nextWanderTime: number; // seconds until next wander
 }
 
 const WALK_SPEED = 8; // tiles per second
@@ -66,10 +75,20 @@ export function createWorker(sessionId: string, deskIndex: number): WorkerEntity
     inBreakRoom: false,
     inMeetingRoom: false,
     lastToolTime: Date.now(),
+    manualTarget: false,
+    emote: null,
+    idleTimer: 0,
+    nextWanderTime: 5 + Math.random() * 5,
   };
 }
 
 export function updateWorker(worker: WorkerEntity, dt: number): boolean {
+  // Tick emote timer
+  if (worker.emote) {
+    worker.emote.timer -= dt;
+    if (worker.emote.timer <= 0) worker.emote = null;
+  }
+
   // Move toward target using L-shaped path
   const dx = worker.targetX - worker.x;
   const dy = worker.targetY - worker.y;
@@ -112,6 +131,10 @@ export function updateWorker(worker: WorkerEntity, dt: number): boolean {
     if (worker.leaving && worker.targetX === DOOR_X && worker.targetY === DOOR_Y) {
       return true; // signal removal
     }
+    // Clear manual target on arrival
+    if (worker.manualTarget) {
+      worker.manualTarget = false;
+    }
     if (!worker.arrived) {
       worker.arrived = true;
       worker.state = 'idle';
@@ -121,9 +144,40 @@ export function updateWorker(worker: WorkerEntity, dt: number): boolean {
       if (worker.inBreakRoom) {
         worker.state = 'idle';
         worker.facing = 'down'; // relax, face the viewer
+      } else if (worker.inMeetingRoom) {
+        worker.state = 'idle';
+        worker.facing = 'up'; // face the whiteboard
       } else {
         worker.state = 'idle';
         worker.facing = 'up'; // back at desk, face the screen
+      }
+    }
+
+    // Idle wandering in break room
+    if (worker.inBreakRoom && worker.state === 'idle') {
+      worker.idleTimer += dt;
+      if (worker.idleTimer >= worker.nextWanderTime) {
+        worker.idleTimer = 0;
+        worker.nextWanderTime = 5 + Math.random() * 8;
+        // Pick a random break room spot different from current
+        const spot = BREAK_ROOM_SPOTS[Math.floor(Math.random() * BREAK_ROOM_SPOTS.length)];
+        if (Math.abs(spot.x - worker.x) > 0.5 || Math.abs(spot.y - worker.y) > 0.5) {
+          worker.targetX = spot.x;
+          worker.targetY = spot.y;
+        } else {
+          // Just change facing direction for variety
+          const dirs: FacingDir[] = ['down', 'left', 'right'];
+          worker.facing = dirs[Math.floor(Math.random() * dirs.length)];
+        }
+      }
+    } else if (worker.inMeetingRoom && worker.state === 'idle') {
+      // Meeting room: occasional facing changes
+      worker.idleTimer += dt;
+      if (worker.idleTimer >= worker.nextWanderTime) {
+        worker.idleTimer = 0;
+        worker.nextWanderTime = 3 + Math.random() * 5;
+        const dirs: FacingDir[] = ['up', 'left', 'right', 'down'];
+        worker.facing = dirs[Math.floor(Math.random() * dirs.length)];
       }
     }
   }
@@ -155,12 +209,24 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       return;
     }
 
+    // Manual target active — update animation but skip location redirects
+    if (worker.manualTarget) {
+      const animState: AnimState = state === 'walking' ? 'walking' : state;
+      if (animState !== worker.state && worker.state !== 'walking') {
+        worker.state = animState;
+        worker.frameIndex = 0;
+        worker.frameTimer = 0;
+      }
+      return;
+    }
+
     if (state === 'idle' && !worker.inBreakRoom) {
       // Go to break room — pick a spot based on desk index
       const spot = BREAK_ROOM_SPOTS[worker.deskIndex % BREAK_ROOM_SPOTS.length];
       worker.targetX = spot.x;
       worker.targetY = spot.y;
       worker.inBreakRoom = true;
+      worker.idleTimer = 0;
       // Walking state will be set by updateWorker when dx/dy detected
       return;
     }
@@ -171,6 +237,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       worker.targetX = desk.chairX;
       worker.targetY = desk.chairY;
       worker.inBreakRoom = false;
+      worker.idleTimer = 0;
       return;
     }
 
@@ -204,8 +271,25 @@ export function setWorkerPlanMode(worker: WorkerEntity, inPlanMode: boolean) {
   }
 }
 
+export function setManualTarget(worker: WorkerEntity, tx: number, ty: number) {
+  if (worker.leaving || !worker.arrived) return;
+  worker.targetX = tx;
+  worker.targetY = ty;
+  worker.manualTarget = true;
+  worker.inBreakRoom = false;
+  worker.inMeetingRoom = false;
+  worker.idleTimer = 0;
+}
+
+const EMOTE_DURATION = 1.5; // seconds
+
+export function triggerEmote(worker: WorkerEntity, type: EmoteType) {
+  worker.emote = { type, timer: EMOTE_DURATION, maxTimer: EMOTE_DURATION };
+}
+
 export function startLeaving(worker: WorkerEntity) {
   worker.leaving = true;
+  worker.manualTarget = false;
   worker.targetX = DOOR_X;
   worker.targetY = DOOR_Y;
   worker.speechBubble = null;

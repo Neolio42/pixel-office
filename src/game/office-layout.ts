@@ -190,6 +190,14 @@ export function buildGrid(): GridCell[][] {
   return grid;
 }
 
+// ── Walkability check ──────────────────────────────────────────────────────
+
+export function isWalkable(tx: number, ty: number, grid: GridCell[][]): boolean {
+  if (ty < 0 || ty >= GRID_H || tx < 0 || tx >= GRID_W) return false;
+  const cell = grid[ty][tx];
+  return !cell.isWall || cell.isDoor;
+}
+
 // ── Furniture placement list ────────────────────────────────────────────────
 // Built once and used by renderer. Positions mirror old buildGrid() furniture.
 

@@ -14,7 +14,19 @@ import {
 } from './office-layout';
 import { AssetBundle, HsbcParams, colorizeImage } from './asset-loader';
 import { drawCharacter, FRAMES, FRAME_DURATIONS, AnimState } from './sprites';
-import { WorkerEntity, getWorkerScreenPos } from './worker-entity';
+import { WorkerEntity, getWorkerScreenPos, EmoteType } from './worker-entity';
+
+/** Interaction state passed from the UI layer to the renderer each frame */
+export interface CanvasInteraction {
+  hoveredWorkerId: string | null;
+  selectedWorkerId: string | null;
+  drag: {
+    workerId: string;
+    cursorX: number; // logical canvas pixel X
+    cursorY: number; // logical canvas pixel Y
+  } | null;
+  dropTile: { tx: number; ty: number } | null; // walkable tile under drag cursor
+}
 
 const T = TILE_SIZE * SCALE; // rendered tile size in CSS pixels
 
@@ -137,7 +149,8 @@ export function renderOffice(
   ctx: CanvasRenderingContext2D,
   grid: GridCell[][],
   workers: WorkerEntity[],
-  dt = 0
+  dt = 0,
+  interaction?: CanvasInteraction
 ): void {
   if (!assets) return;
 
@@ -168,6 +181,21 @@ export function renderOffice(
         drawWallTile(ctx, tx, ty, cell);
       }
     }
+  }
+
+  // ── Pass 2b: Drop indicator (when dragging a worker) ─────────────────────
+  if (interaction?.dropTile) {
+    const { tx, ty } = interaction.dropTile;
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#4abf5c';
+    // Draw a soft circle at the drop tile
+    const cx = tx * T + T / 2;
+    const cy = ty * T + T / 2;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + T * 0.2, T * 0.45, T * 0.25, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // ── Pass 3: Background furniture (bookshelves, plants, whiteboard, etc.) ──
@@ -242,12 +270,16 @@ export function renderOffice(
   }
 
   // ── Pass 5: Workers (depth-sorted by y) ───────────────────────────────────
+  const draggedId = interaction?.drag?.workerId ?? null;
   const sorted = [...workers].sort((a, b) => a.y - b.y);
 
   const SPRITE_W = 16;
   const SPRITE_H = 32;
 
   for (const worker of sorted) {
+    // Skip dragged worker in normal pass — draw them floating at cursor later
+    if (worker.sessionId === draggedId) continue;
+
     const pos = getWorkerScreenPos(worker);
     const renderedW = SPRITE_W * SCALE;
     const renderedH = SPRITE_H * SCALE;
@@ -262,11 +294,82 @@ export function renderOffice(
       spy += 6 * SCALE; // 6 source pixels down
     }
 
+    // Hover highlight — soft glow ellipse under the worker
+    if (interaction?.hoveredWorkerId === worker.sessionId && draggedId === null) {
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(spx + renderedW / 2, spy + renderedH - 4, renderedW * 0.55, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Selection highlight — brighter ellipse
+    if (interaction?.selectedWorkerId === worker.sessionId) {
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#4a7cbf';
+      ctx.beginPath();
+      ctx.ellipse(spx + renderedW / 2, spy + renderedH - 4, renderedW * 0.55, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     const charSheet = assets.characters[worker.charIndex % assets.characters.length];
     drawCharacter(ctx, charSheet, worker.state, worker.frameIndex, spx, spy, SCALE, worker.facing);
 
+    // Speech bubble
     if (worker.speechBubble) {
       drawSpeechBubble(ctx, spx + renderedW / 2, spy - 4, worker.speechBubble);
+    }
+
+    // Emote
+    if (worker.emote) {
+      drawEmote(ctx, spx + renderedW / 2, spy - (worker.speechBubble ? 40 : 8), worker.emote);
+    }
+  }
+
+  // ── Pass 5b: Dragged worker — floating at cursor, picked up look ────────
+  if (interaction?.drag && draggedId) {
+    const worker = workers.find(w => w.sessionId === draggedId);
+    if (worker && assets) {
+      const { cursorX, cursorY } = interaction.drag;
+      const pickupScale = SCALE * 1.3; // bigger = picked up
+      const renderedW = SPRITE_W * pickupScale;
+      const renderedH = SPRITE_H * pickupScale;
+      const spx = cursorX - renderedW / 2;
+      const spy = cursorY - renderedH - 8; // float above cursor
+
+      // Drop shadow at cursor
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.ellipse(cursorX, cursorY + 4, renderedW * 0.4, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Bobbing animation
+      const bob = Math.sin(globalTime * 4) * 3;
+
+      const charSheet = assets.characters[worker.charIndex % assets.characters.length];
+      drawCharacter(ctx, charSheet, 'idle', worker.frameIndex, spx, spy + bob, pickupScale, 'down');
+
+      // Ghost at original position (faint)
+      const origPos = getWorkerScreenPos(worker);
+      const origW = SPRITE_W * SCALE;
+      const origH = SPRITE_H * SCALE;
+      const origSpx = origPos.x + Math.floor((T - origW) / 2);
+      let origSpy = origPos.y + T - origH;
+      if (worker.arrived && !worker.leaving &&
+          (worker.state === 'typing' || worker.state === 'reading' || worker.state === 'idle')) {
+        origSpy += 6 * SCALE;
+      }
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      drawCharacter(ctx, charSheet, worker.state, worker.frameIndex, origSpx, origSpy, SCALE, worker.facing);
+      ctx.restore();
     }
   }
 
@@ -277,6 +380,7 @@ export function renderOffice(
 // ── Coffee steam animation ────────────────────────────────────────────────
 
 function drawSteam(ctx: CanvasRenderingContext2D, cx: number, topY: number) {
+  ctx.save();
   const s = SCALE;
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   // 3 small rising wisp pixels
@@ -288,7 +392,7 @@ function drawSteam(ctx: CanvasRenderingContext2D, cx: number, topY: number) {
     ctx.globalAlpha = alpha * 0.4;
     ctx.fillRect(cx + xWobble - s, topY - yOff - s, s * 2, s * 2);
   }
-  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 // ── Speech bubble ──────────────────────────────────────────────────────────
@@ -346,6 +450,71 @@ function drawSpeechBubble(ctx: CanvasRenderingContext2D, cx: number, bottomY: nu
   ctx.fillText(text, cx, by + h / 2);
   ctx.textAlign = 'start';
   ctx.textBaseline = 'alphabetic';
+}
+
+// ── Emote rendering ─────────────────────────────────────────────────────────
+
+function drawEmote(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  bottomY: number,
+  emote: { type: EmoteType; timer: number; maxTimer: number }
+) {
+  const progress = 1 - emote.timer / emote.maxTimer; // 0 → 1
+  const alpha = Math.max(0, 1 - progress * 1.2); // fade out
+  const floatY = bottomY - progress * 24; // float upward
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  const s = SCALE;
+  switch (emote.type) {
+    case 'approved': {
+      // Green checkmark
+      ctx.fillStyle = '#4abf5c';
+      ctx.fillRect(cx - 4 * s, floatY - 2 * s, s, 3 * s);
+      ctx.fillRect(cx - 3 * s, floatY + 1 * s, s, s);
+      ctx.fillRect(cx - 2 * s, floatY, s, s);
+      ctx.fillRect(cx - 1 * s, floatY - 1 * s, s, s);
+      ctx.fillRect(cx, floatY - 2 * s, s, s);
+      ctx.fillRect(cx + 1 * s, floatY - 3 * s, s, s);
+      break;
+    }
+    case 'denied': {
+      // Red X
+      ctx.fillStyle = '#e05c5c';
+      for (let i = 0; i < 4; i++) {
+        ctx.fillRect(cx - 2 * s + i * s, floatY - 2 * s + i * s, s, s);
+        ctx.fillRect(cx + 1 * s - i * s, floatY - 2 * s + i * s, s, s);
+      }
+      break;
+    }
+    case 'error': {
+      // Red exclamation
+      ctx.fillStyle = '#e05c5c';
+      ctx.fillRect(cx - s / 2, floatY - 4 * s, s, 3 * s);
+      ctx.fillRect(cx - s / 2, floatY, s, s);
+      break;
+    }
+    case 'done': {
+      // Gold sparkle star
+      ctx.fillStyle = '#f0d040';
+      const starX = cx;
+      const starY = floatY - 2 * s;
+      // Vertical bar
+      ctx.fillRect(starX - s / 2, starY - 2 * s, s, 4 * s);
+      // Horizontal bar
+      ctx.fillRect(starX - 2 * s, starY - s / 2, 4 * s, s);
+      // Diagonal dots
+      ctx.fillRect(starX - s * 1.2, starY - s * 1.2, s * 0.8, s * 0.8);
+      ctx.fillRect(starX + s * 0.5, starY - s * 1.2, s * 0.8, s * 0.8);
+      ctx.fillRect(starX - s * 1.2, starY + s * 0.5, s * 0.8, s * 0.8);
+      ctx.fillRect(starX + s * 0.5, starY + s * 0.5, s * 0.8, s * 0.8);
+      break;
+    }
+  }
+
+  ctx.restore();
 }
 
 // ── Room labels ─────────────────────────────────────────────────────────────
