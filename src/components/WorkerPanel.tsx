@@ -28,7 +28,7 @@ function projectName(cwd: string): string {
 
 interface Props {
   sessions: Session[];
-  visiblePtyIds: string[];
+  visiblePtyIds?: string[];
   onSelectWorker?: (sessionId: string | null) => void;
   onOpenTerminal?: (ptyId: string) => void;
   onSpawn?: (cwd: string) => void;
@@ -37,7 +37,7 @@ interface Props {
   onDragSessionStart?: (ptyId: string) => void;
 }
 
-export function WorkerPanel({ sessions, visiblePtyIds, onSelectWorker, onOpenTerminal, onSpawn, spawnError, onDragSessionStart }: Props) {
+export function WorkerPanel({ sessions, visiblePtyIds = [], onSelectWorker, onOpenTerminal, onSpawn, spawnError, onDragSessionStart }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [focusing, setFocusing] = useState<string | null>(null);
   const [showSpawnInput, setShowSpawnInput] = useState(false);
