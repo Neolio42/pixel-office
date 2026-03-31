@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
-import { getSession, addSession, updateSession, updateSessionTty, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus, getNeedsFocusUpdate, setNeedsFocusUpdate } from '@/lib/store';
+import { getSession, addSession, updateSession, updateSessionTty, updateSessionCwd, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus, getNeedsFocusUpdate, setNeedsFocusUpdate } from '@/lib/store';
 import { classifyTool } from '@/lib/tool-classifier';
 import { createApproval, resolveApproval } from '@/lib/approval-queue';
 import { broadcast, hasConnectedClients } from '@/lib/ws-server';
@@ -39,8 +39,15 @@ export async function POST(req: NextRequest) {
   // Auto-create session if it doesn't exist (e.g. session-start was missed)
   if (!getSession(sessionId)) {
     addSession(sessionId, cwd, tty, transcriptPath);
-  } else if (tty) {
-    updateSessionTty(sessionId, tty);
+  } else {
+    // Backfill empty cwd/tty from hook payload (session-start may have been missed or lacked data)
+    let changed = false;
+    if (tty) changed = updateSessionTty(sessionId, tty) || changed;
+    if (cwd) changed = updateSessionCwd(sessionId, cwd) || changed;
+    if (changed) {
+      const s = getSession(sessionId);
+      if (s) broadcast({ type: 'session-update', session: s });
+    }
   }
 
   // Fallback: if session has no task yet and transcript_path exists, try reading it
@@ -165,7 +172,12 @@ export async function POST(req: NextRequest) {
 
   // Always broadcast resolution — covers timeout, disconnect-denial, and normal paths.
   // Without this, timeout/disconnect resolutions leave ghost toasts in the UI.
-  broadcast({ type: 'approval-resolved', approvalId: approval.id });
+  broadcast({
+    type: 'approval-resolved',
+    approvalId: approval.id,
+    decision: result.decision,
+    message: result.message,
+  });
 
   const hookResponse: Record<string, unknown> = {
     hookEventName: 'PreToolUse',

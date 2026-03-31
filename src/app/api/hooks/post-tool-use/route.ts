@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, addSession, updateSession } from '@/lib/store';
+import { getSession, addSession, updateSession, updateSessionCwd } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 
 export async function POST(req: NextRequest) {
@@ -22,6 +22,12 @@ export async function POST(req: NextRequest) {
   // Auto-create session if it doesn't exist (e.g. session-start was missed)
   if (!getSession(sessionId)) {
     addSession(sessionId, cwd);
+  } else if (cwd) {
+    // Backfill empty cwd (session-start may have been missed)
+    if (updateSessionCwd(sessionId, cwd)) {
+      const s = getSession(sessionId);
+      if (s) broadcast({ type: 'session-update', session: s });
+    }
   }
 
   // Don't set idle immediately — the next pre-tool-use will come within ms

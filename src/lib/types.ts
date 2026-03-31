@@ -33,7 +33,7 @@ export type WSMessageToClient =
   | { type: 'session-update'; session: Session }
   | { type: 'session-remove'; sessionId: string }
   | { type: 'approval-request'; approval: { id: string; sessionId: string; toolName: string; toolInput: Record<string, unknown>; createdAt: number; reason: 'safe' | 'risky' | 'unknown' } }
-  | { type: 'approval-resolved'; approvalId: string }
+  | { type: 'approval-resolved'; approvalId: string; decision?: 'allow' | 'deny'; message?: string }
   | { type: 'notification'; sessionId: string; message: string }
   | { type: 'terminal-output'; ptyId: string; data: string }
   | { type: 'terminal-scrollback'; ptyId: string; data: string }
@@ -48,7 +48,8 @@ export type WSMessageFromClient =
   | { type: 'terminal-resize'; ptyId: string; cols: number; rows: number }
   | { type: 'terminal-subscribe'; ptyId: string; cols?: number; rows?: number }
   | { type: 'terminal-unsubscribe'; ptyId: string }
-  | { type: 'spawn-session'; cwd: string; prompt?: string };
+  | { type: 'spawn-session'; cwd: string; prompt?: string }
+  | { type: 'dismiss-session'; sessionId: string };
 
 export interface HookPayload {
   session_id: string;

@@ -6,7 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import { WSMessageToClient, WSMessageFromClient } from './types';
 import { resolveApproval, getPendingApprovals, getPendingApproval } from './approval-queue';
-import { getAllSessions } from './store';
+import { getAllSessions, removeSession } from './store';
 import { addWhitelistRule, extractBashEntry, extractToolEntry } from './whitelist';
 import {
   spawnSession,
@@ -120,18 +120,25 @@ export function initWSS(server: Server) {
 
     ws.on('close', () => {
       console.log('[WS] Client disconnected');
-      // Delay before checking — gives the browser time to reconnect on refresh
+      // Wait 5s before checking — gives the browser time to reconnect on refresh.
+      // Only deny approvals that have been pending for >60s to avoid killing
+      // approvals during a quick tab refresh.
       setTimeout(() => {
         if (!hasConnectedClients()) {
           const pending = getPendingApprovals();
           if (pending.length > 0) {
-            console.log(`[WS] No clients after 2s — denying ${pending.length} pending approval(s)`);
-            for (const approval of pending) {
-              resolveApproval(approval.id, 'deny', 'Browser disconnected — no boss to approve');
+            const cutoff = Date.now() - 60_000;
+            const stale = pending.filter(a => a.createdAt < cutoff);
+            const kept = pending.filter(a => a.createdAt >= cutoff);
+            if (stale.length > 0) {
+              console.log(`[WS] No clients after 5s — denying ${stale.length} stale approval(s), keeping ${kept.length} recent`);
+              for (const approval of stale) {
+                resolveApproval(approval.id, 'deny', 'Browser disconnected — no boss to approve');
+              }
             }
           }
         }
-      }, 2000);
+      }, 5000);
     });
 
     ws.on('error', (err) => {
@@ -281,6 +288,20 @@ function handleClientMessage(ws: WebSocket, msg: WSMessageFromClient) {
     case 'terminal-unsubscribe': {
       const meta = ensureMeta(ws);
       meta.subscriptions.delete(msg.ptyId);
+      break;
+    }
+
+    case 'dismiss-session': {
+      const session = getAllSessions().find(s => s.sessionId === msg.sessionId);
+      if (!session) break;
+      // Deny any pending approvals for this session
+      const orphaned = getPendingApprovals().filter(a => a.sessionId === msg.sessionId);
+      for (const approval of orphaned) {
+        resolveApproval(approval.id, 'deny', 'Dismissed by boss');
+      }
+      removeSession(msg.sessionId);
+      broadcast({ type: 'session-remove', sessionId: msg.sessionId });
+      console.log(`[WS] Boss dismissed session: ${msg.sessionId}${orphaned.length > 0 ? ` (${orphaned.length} approval(s) denied)` : ''}`);
       break;
     }
   }

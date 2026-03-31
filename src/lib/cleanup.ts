@@ -11,7 +11,7 @@ export function startStaleSessionCleanup(): void {
   if (!globalThis.__staleSessionCleanup) {
     globalThis.__staleSessionCleanup = setInterval(() => {
       const isAlivePty = (ptyId: string) => { const e = getAllPtyEntries().find(p => p.ptyId === ptyId); return !!e && !e.exited; };
-      const removed = cleanupStaleSessions(30 * 60_000, isAlivePty);
+      const removed = cleanupStaleSessions(24 * 60 * 60_000, isAlivePty);
       for (const sessionId of removed) {
         console.log(`[cleanup] Removed stale session: ${sessionId}`);
         broadcast({ type: 'session-remove', sessionId });

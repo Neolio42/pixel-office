@@ -48,11 +48,22 @@ export function addSession(sessionId: string, cwd: string, tty = '', transcriptP
   return session;
 }
 
-export function updateSessionTty(sessionId: string, tty: string): void {
+export function updateSessionTty(sessionId: string, tty: string): boolean {
   const session = getSessions().get(sessionId);
   if (session && TTY_RE.test(tty)) {
     session.tty = tty;
+    return true;
   }
+  return false;
+}
+
+export function updateSessionCwd(sessionId: string, cwd: string): boolean {
+  const session = getSessions().get(sessionId);
+  if (session && cwd && !session.cwd) {
+    session.cwd = cwd;
+    return true;
+  }
+  return false;
 }
 
 export function updateSession(sessionId: string, state: WorkerState, tool: string | null): Session | null {

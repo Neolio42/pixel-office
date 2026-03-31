@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, removeSession, updateSession } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 import { unlinkSessionFromPty, getPtyEntry, killPty } from '@/lib/pty-manager';
+import { resolveApproval, getPendingApprovals } from '@/lib/approval-queue';
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -37,7 +38,15 @@ export async function POST(req: NextRequest) {
   // No PTY or PTY already exited — fully remove
   if (session?.ptyId) killPty(session.ptyId);
   removeSession(sessionId);
+
+  // Deny any orphaned approvals for this session.
+  // Only resolve — pre-tool-use will broadcast approval-resolved when its await unblocks.
+  const orphaned = getPendingApprovals().filter(a => a.sessionId === sessionId);
+  for (const approval of orphaned) {
+    resolveApproval(approval.id, 'deny', 'Session ended');
+  }
+
   broadcast({ type: 'session-remove', sessionId });
-  console.log(`[Hook] Session ended: ${sessionId}`);
+  console.log(`[Hook] Session ended: ${sessionId}${orphaned.length > 0 ? ` (${orphaned.length} orphan approval(s) denied)` : ''}`);
   return NextResponse.json({ status: 'ok' });
 }

@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useWorkspace } from '@/hooks/useWorkspace';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useWorkspace, ApprovalRequest, ResolvedApproval } from '@/hooks/useWorkspace';
 import { STATE_COLORS } from '@/lib/ui-constants';
-import { ApprovalRequest } from '@/hooks/useWorkspace';
 import { Session } from '@/lib/types';
 
 // --- shared helpers (duplicated from WorkerPanel to keep panel self-contained) ---
@@ -23,6 +22,15 @@ function formatDuration(startedAt: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
 }
 
 function projectName(cwd: string): string {
@@ -64,20 +72,32 @@ function formatToolDetails(toolName: string, toolInput: Record<string, unknown>)
   return { title, details };
 }
 
+function getAlwaysAllowLabel(toolName: string, toolInput: Record<string, unknown>): string {
+  if (toolName === 'Bash' || toolName === 'BashOutput') {
+    const cmd = String(toolInput.command || '').trim();
+    const args = cmd.split(/\s+/);
+    return (args[0]?.split('/').pop() || args[0] || 'unknown').toLowerCase();
+  }
+  return cleanToolName(toolName);
+}
+
 // --- components ---
 
 function ApprovalCard({
   approval,
   session,
   onDecision,
+  onAlwaysAllow,
 }: {
   approval: ApprovalRequest;
   session: Session | undefined;
   onDecision: (id: string, decision: 'allow' | 'deny', message?: string) => void;
+  onAlwaysAllow?: (id: string) => void;
 }) {
   const { title, details } = formatToolDetails(approval.toolName, approval.toolInput);
   const project = session ? projectName(session.cwd) : null;
   const reasonColor = approval.reason === 'risky' ? '#bf8b4a' : approval.reason === 'unknown' ? '#8b4abf' : '#4abf5c';
+  const alwaysLabel = getAlwaysAllowLabel(approval.toolName, approval.toolInput);
 
   return (
     <div className="rounded-lg border border-[#2a2a4a] bg-[#12122a] p-2.5">
@@ -112,6 +132,78 @@ function ApprovalCard({
           Deny
         </button>
       </div>
+      {onAlwaysAllow && (
+        <button
+          onClick={() => onAlwaysAllow(approval.id)}
+          className="w-full mt-1.5 py-0.5 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-[9px] font-mono rounded transition-colors cursor-pointer"
+        >
+          Always allow {alwaysLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SectionHeader({
+  label,
+  count,
+  badge,
+  collapsed,
+  onToggle,
+}: {
+  label: string;
+  count: number;
+  badge?: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className="w-full px-2 py-1.5 flex items-center gap-1.5 hover:bg-[#12122a] transition-colors cursor-pointer"
+    >
+      <span className="text-[#445] text-[8px]">{collapsed ? '▸' : '▾'}</span>
+      <span className="text-[#556] text-[9px] font-mono uppercase tracking-widest">{label}</span>
+      {count > 0 && (
+        <span className="text-[#445] text-[9px] font-mono">{count}</span>
+      )}
+      {badge != null && badge > 0 && (
+        <span className="text-[#bf8b4a] text-[9px] font-mono animate-pulse font-bold">{badge}</span>
+      )}
+    </button>
+  );
+}
+
+function HistoryEntry({
+  entry,
+  sessions,
+}: {
+  entry: ResolvedApproval;
+  sessions: Session[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const session = sessions.find(s => s.sessionId === entry.approval.sessionId);
+  const { title, details } = formatToolDetails(entry.approval.toolName, entry.approval.toolInput);
+  const isAllow = entry.decision === 'allow';
+  const dotColor = isAllow ? '#4abf5c' : '#bf4a4a';
+
+  return (
+    <div
+      className="px-2 py-0.5 hover:bg-[#0e0e1e] cursor-pointer transition-colors"
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div className="flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />
+        <span className="text-[#667] text-[10px] font-mono flex-1 truncate">{title}</span>
+        <span className="text-[#334] text-[9px] font-mono flex-shrink-0">{formatRelativeTime(entry.resolvedAt)}</span>
+      </div>
+      {expanded && (
+        <div className="ml-3 mt-0.5">
+          {details && <div className="text-[#556] text-[9px] font-mono truncate">{details}</div>}
+          {session && <div className="text-[#334] text-[8px] font-mono">{projectName(session.cwd)}</div>}
+          {entry.message && <div className="text-[#445] text-[8px] font-mono italic">{entry.message}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -122,17 +214,28 @@ function WorkerItem({
   onToggle,
   focusing,
   onFocus,
+  onDismiss,
+  pendingApprovals,
+  onDecision,
+  onAlwaysAllow,
 }: {
   session: Session;
   isExpanded: boolean;
   onToggle: () => void;
   focusing: boolean;
   onFocus: () => void;
+  onDismiss: () => void;
+  pendingApprovals: ApprovalRequest[];
+  onDecision: (id: string, decision: 'allow' | 'deny', message?: string) => void;
+  onAlwaysAllow: (id: string) => void;
 }) {
   const isIdle = session.state === 'idle';
   const isWaiting = session.state === 'waiting';
+  const hasTty = !!session.tty;
   const project = projectName(session.cwd);
-  const stateColor = STATE_COLORS[session.state] || '#444';
+  const displayName = project || session.sessionId.slice(0, 8);
+  const isGhost = !session.task && session.recentTools.length === 0 && isIdle;
+  const stateColor = isGhost ? '#222' : (STATE_COLORS[session.state] || '#444');
   const stateIcon = STATE_ICONS[session.state] || '·';
   const focus = session.currentFocus || null;
   const lastTool = session.recentTools[session.recentTools.length - 1];
@@ -141,7 +244,7 @@ function WorkerItem({
     <div
       className={`rounded-md cursor-pointer transition-all duration-200 overflow-hidden ${
         isExpanded ? 'bg-[#161630]' : 'hover:bg-[#12122a]'
-      }`}
+      } ${isGhost ? 'opacity-40' : ''}`}
       style={{ borderLeft: `2px solid ${stateColor}` }}
       onClick={onToggle}
     >
@@ -156,10 +259,25 @@ function WorkerItem({
           >
             {stateIcon}
           </span>
-          <span className="text-[#99a] text-[11px] font-mono font-bold flex-1 truncate">{project}</span>
+          <span className="text-[#99a] text-[11px] font-mono font-bold flex-1 truncate">{displayName}</span>
+          {pendingApprovals.length > 0 && (
+            <span className="bg-[#bf8b4a] text-[#0e0e1e] text-[8px] font-mono font-bold rounded-full w-4 h-4 flex items-center justify-center animate-pulse flex-shrink-0">
+              {pendingApprovals.length}
+            </span>
+          )}
           <span className="text-[#2a2a3a] text-[10px] font-mono flex-shrink-0">
             {formatDuration(session.startedAt)}
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss();
+            }}
+            className="text-[#2a2a3a] hover:text-[#bf4a4a] text-[10px] font-mono flex-shrink-0 leading-none cursor-pointer transition-colors ml-0.5"
+            title="Dismiss"
+          >
+            ×
+          </button>
         </div>
 
         {focus && (
@@ -170,11 +288,15 @@ function WorkerItem({
           <div className="text-[#3a3a5a] text-[9px] font-mono mt-0.5 ml-4 truncate">{lastTool.summary}</div>
         )}
 
-        {!focus && isIdle && (
+        {!focus && isIdle && !isGhost && (
           <div className="text-[#2a2a3a] text-[10px] font-mono mt-0.5 ml-4">On break</div>
         )}
 
-        {isWaiting && (
+        {isGhost && (
+          <div className="text-[#1a1a2a] text-[9px] font-mono mt-0.5 ml-4">No activity</div>
+        )}
+
+        {isWaiting && pendingApprovals.length === 0 && (
           <div className="ml-4 mt-0.5">
             <span className="text-[#bf8b4a] text-[9px] font-mono bg-[#bf8b4a]/8 border border-[#bf8b4a]/15 rounded px-1 py-0.5 leading-none">
               Needs approval
@@ -189,6 +311,21 @@ function WorkerItem({
       >
         <div className="overflow-hidden">
           <div className="px-2.5 pb-2 pt-1">
+            {/* Inline approvals */}
+            {pendingApprovals.length > 0 && (
+              <div className="mb-1.5 flex flex-col gap-1.5">
+                {pendingApprovals.map(a => (
+                  <ApprovalCard
+                    key={a.id}
+                    approval={a}
+                    session={session}
+                    onDecision={onDecision}
+                    onAlwaysAllow={onAlwaysAllow}
+                  />
+                ))}
+              </div>
+            )}
+
             {/* Tool history */}
             {session.recentTools.length > 1 && (
               <div className="mb-1.5 ml-1">
@@ -213,16 +350,18 @@ function WorkerItem({
                 ))}
               </div>
             )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onFocus();
-              }}
-              disabled={focusing}
-              className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[9px] font-mono rounded transition-colors cursor-pointer disabled:opacity-50"
-            >
-              {focusing ? 'Focusing…' : 'Focus Terminal'}
-            </button>
+            {hasTty && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFocus();
+                }}
+                disabled={focusing}
+                className="w-full py-1 bg-[#0a0a16] hover:bg-[#141428] border border-[#1a1a30] text-[#445] hover:text-[#778] text-[9px] font-mono rounded transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {focusing ? 'Focusing…' : 'Focus Terminal'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -232,16 +371,94 @@ function WorkerItem({
 
 // --- main page ---
 
+function usePersistedState<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [state, setState] = useState<T>(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored !== null ? JSON.parse(stored) : initial;
+    } catch {
+      return initial;
+    }
+  });
+
+  const set = useCallback((v: T) => {
+    setState(v);
+    try {
+      localStorage.setItem(key, JSON.stringify(v));
+    } catch { /* ignore */ }
+  }, [key]);
+
+  return [state, set];
+}
+
 export default function ItermPanelPage() {
   const {
-    sessions, approvals, sendApproval,
+    sessions, approvals, approvalHistory, sendApproval, sendAlwaysAllow, sendDismissSession,
   } = useWorkspace();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [focusing, setFocusing] = useState<string | null>(null);
   const [, setTick] = useState(0);
+  const [approvalsCollapsed, setApprovalsCollapsed] = usePersistedState('iterm-panel-approvals-collapsed', false);
+  const [workersCollapsed, setWorkersCollapsed] = usePersistedState('iterm-panel-workers-collapsed', false);
+  const [historyCollapsed, setHistoryCollapsed] = usePersistedState('iterm-panel-history-collapsed', true);
+  const [activityLog, setActivityLog] = useState<Array<{ time: string; tool: string; detail: string }>>([]);
 
-  // Tick for duration updates
+  // Auto-expand approvals when new ones arrive
+  const prevApprovalCountRef = useRef(approvals.length);
+  useEffect(() => {
+    if (approvals.length > prevApprovalCountRef.current) {
+      setApprovalsCollapsed(false);
+    }
+    prevApprovalCountRef.current = approvals.length;
+  }, [approvals.length, setApprovalsCollapsed]);
+
+  // Sort approvals: risky first, then unknown, then oldest first within each tier
+  const sortedApprovals = useMemo(() => {
+    const priority: Record<string, number> = { risky: 0, unknown: 1, safe: 2 };
+    return [...approvals].sort((a, b) => {
+      const pa = priority[a.reason] ?? 2;
+      const pb = priority[b.reason] ?? 2;
+      if (pa !== pb) return pa - pb;
+      return a.createdAt - b.createdAt;
+    });
+  }, [approvals]);
+
+  const activeApproval = sortedApprovals[0];
+  const queuedCount = sortedApprovals.length - 1;
+
+  // Group approvals by session for worker badges
+  const approvalsBySession = useMemo(() => {
+    const map = new Map<string, ApprovalRequest[]>();
+    for (const a of approvals) {
+      const list = map.get(a.sessionId) || [];
+      list.push(a);
+      map.set(a.sessionId, list);
+    }
+    return map;
+  }, [approvals]);
+
+  // Keyboard shortcuts for approval queue
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (sortedApprovals.length === 0) return;
+      // Don't capture if typing in an input or button
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLButtonElement) return;
+
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === 'y') {
+        e.preventDefault();
+        sendApproval(activeApproval!.id, 'allow');
+      } else if (mod && e.key === 'n') {
+        e.preventDefault();
+        sendApproval(activeApproval!.id, 'deny');
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [sortedApprovals, activeApproval, sendApproval]);
+
+  // Tick for duration updates (every minute)
   useEffect(() => {
     const interval = setInterval(() => setTick(t => t + 1), 60000);
     return () => clearInterval(interval);
@@ -253,6 +470,33 @@ export default function ItermPanelPage() {
     document.body.style.padding = '0';
     document.body.style.overflow = 'hidden';
   }, []);
+
+  // Fetch activity log when no workers
+  useEffect(() => {
+    if (sessions.length > 0) {
+      setActivityLog([]);
+      return;
+    }
+
+    async function fetchLog() {
+      try {
+        const res = await fetch('/api/command-log?limit=15');
+        if (!res.ok) return;
+        const { entries } = await res.json();
+        setActivityLog(
+          (entries || []).map((l: Record<string, unknown>) => ({
+            time: String(l.timestamp || ''),
+            tool: String(l.toolName || 'unknown'),
+            detail: String(l.summary || ''),
+          }))
+        );
+      } catch { /* ignore */ }
+    }
+
+    fetchLog();
+    const interval = setInterval(fetchLog, 30000);
+    return () => clearInterval(interval);
+  }, [sessions.length]);
 
   const handleFocus = useCallback(async (sessionId: string) => {
     setFocusing(sessionId);
@@ -277,43 +521,123 @@ export default function ItermPanelPage() {
             {sessions.length} worker{sessions.length !== 1 ? 's' : ''}
           </span>
         </div>
+        {approvals.length > 0 && (
+          <span className="ml-auto bg-[#bf8b4a] text-[#0e0e1e] text-[9px] font-mono font-bold rounded-full px-1.5 py-0.5 animate-pulse">
+            {approvals.length}
+          </span>
+        )}
       </div>
 
-      {/* Approvals */}
+      {/* Approvals section */}
       {approvals.length > 0 && (
-        <div className="p-2 flex flex-col gap-2 flex-shrink-0 border-b border-[#1a1a3a]">
-          <span className="text-[#556] text-[9px] font-mono uppercase tracking-widest px-1">
-            {approvals.length} pending
-          </span>
-          {approvals.map(approval => (
-            <ApprovalCard
-              key={approval.id}
-              approval={approval}
-              session={sessions.find(s => s.sessionId === approval.sessionId)}
-              onDecision={sendApproval}
-            />
-          ))}
+        <div className="border-b border-[#1a1a3a] flex-shrink-0">
+          <SectionHeader
+            label="Approvals"
+            count={approvals.length}
+            badge={queuedCount}
+            collapsed={approvalsCollapsed}
+            onToggle={() => setApprovalsCollapsed(!approvalsCollapsed)}
+          />
+          {!approvalsCollapsed && (
+            <div className="px-2 pb-2 flex flex-col gap-1.5">
+              {activeApproval && (
+                <ApprovalCard
+                  approval={activeApproval}
+                  session={sessions.find(s => s.sessionId === activeApproval.sessionId)}
+                  onDecision={sendApproval}
+                  onAlwaysAllow={sendAlwaysAllow}
+                />
+              )}
+              {queuedCount > 0 && (
+                <div className="text-[#445] text-[9px] font-mono text-center py-0.5">
+                  +{queuedCount} more queued &middot; <span className="text-[#667]">⌘Y</span> allow &middot; <span className="text-[#667]">⌘N</span> deny
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Worker list */}
-      <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5">
-        {sessions.length === 0 && (
-          <div className="px-3 py-6 text-center">
-            <p className="text-[#333] text-[11px] font-mono">No workers yet</p>
-            <p className="text-[#222] text-[9px] font-mono mt-1">Start a Claude session to see them here</p>
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Workers section */}
+        {sessions.length > 0 && (
+          <div className="border-b border-[#1a1a3a]">
+            <SectionHeader
+              label="Workers"
+              count={sessions.length}
+              collapsed={workersCollapsed}
+              onToggle={() => setWorkersCollapsed(!workersCollapsed)}
+            />
+            {!workersCollapsed && (
+              <div className="p-1.5 flex flex-col gap-0.5">
+                {sessions.map(session => (
+                  <WorkerItem
+                    key={session.sessionId}
+                    session={session}
+                    isExpanded={expandedId === session.sessionId}
+                    onToggle={() => setExpandedId(expandedId === session.sessionId ? null : session.sessionId)}
+                    focusing={focusing === session.sessionId}
+                    onFocus={() => handleFocus(session.sessionId)}
+                    onDismiss={() => sendDismissSession(session.sessionId)}
+                    pendingApprovals={approvalsBySession.get(session.sessionId) || []}
+                    onDecision={sendApproval}
+                    onAlwaysAllow={sendAlwaysAllow}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
-        {sessions.map(session => (
-          <WorkerItem
-            key={session.sessionId}
-            session={session}
-            isExpanded={expandedId === session.sessionId}
-            onToggle={() => setExpandedId(expandedId === session.sessionId ? null : session.sessionId)}
-            focusing={focusing === session.sessionId}
-            onFocus={() => handleFocus(session.sessionId)}
-          />
-        ))}
+
+        {/* Idle activity feed */}
+        {sessions.length === 0 && (
+          <div className="p-1.5">
+            <div className="px-2 py-1.5">
+              <span className="text-[#556] text-[9px] font-mono uppercase tracking-widest">Recent Activity</span>
+            </div>
+            {activityLog.length > 0 ? (
+              <div className="flex flex-col">
+                {activityLog.map((entry, i) => (
+                  <div key={i} className="px-2.5 py-0.5 flex items-start gap-1.5">
+                    <span className="text-[#2a2a3a] text-[9px] font-mono flex-shrink-0 w-10">
+                      {entry.time ? new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    </span>
+                    <span className="text-[#445] text-[9px] font-mono truncate">{entry.detail || entry.tool}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="px-3 py-6 text-center">
+                <p className="text-[#333] text-[11px] font-mono">No activity yet</p>
+                <p className="text-[#222] text-[9px] font-mono mt-1">Start a Claude session to see them here</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* History section */}
+        {approvalHistory.length > 0 && (
+          <div className="border-t border-[#1a1a3a]">
+            <SectionHeader
+              label="History"
+              count={approvalHistory.length}
+              collapsed={historyCollapsed}
+              onToggle={() => setHistoryCollapsed(!historyCollapsed)}
+            />
+            {!historyCollapsed && (
+              <div className="flex flex-col">
+                {[...approvalHistory].reverse().map(entry => (
+                  <HistoryEntry
+                    key={entry.approval.id}
+                    entry={entry}
+                    sessions={sessions}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
