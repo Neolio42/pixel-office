@@ -54,7 +54,7 @@ function formatToolDetails(toolName: string, toolInput: Record<string, unknown>)
   if (toolName === 'Bash' || toolName === 'bash') {
     const cmd = typeof toolInput.command === 'string' ? toolInput.command : '';
     title = cmd.split(' ')[0] || 'Bash';
-    details = cmd.length > 120 ? cmd.slice(0, 117) + '…' : cmd;
+    details = cmd;
   } else if (toolName === 'Write' || toolName === 'Edit') {
     const path = typeof toolInput.file_path === 'string' ? toolInput.file_path : '';
     details = path.split('/').slice(-2).join('/') || '';
@@ -64,9 +64,9 @@ function formatToolDetails(toolName: string, toolInput: Record<string, unknown>)
   } else if (typeof toolInput.path === 'string') {
     details = toolInput.path.split('/').slice(-2).join('/');
   } else if (typeof toolInput.pattern === 'string') {
-    details = toolInput.pattern.length > 60 ? toolInput.pattern.slice(0, 57) + '…' : toolInput.pattern;
+    details = toolInput.pattern;
   } else if (typeof toolInput.query === 'string') {
-    details = toolInput.query.length > 60 ? toolInput.query.slice(0, 57) + '…' : toolInput.query;
+    details = toolInput.query;
   }
 
   return { title, details };
@@ -100,23 +100,35 @@ function ApprovalCard({
   const alwaysLabel = getAlwaysAllowLabel(approval.toolName, approval.toolInput);
 
   return (
-    <div className="rounded-lg border border-[#2a2a4a] bg-[#12122a] p-2.5">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[11px] font-mono font-bold text-[#ccd]" style={{ color: reasonColor }}>
-          {title}
-        </span>
+    <div className="rounded-lg border border-[#2a2a4a] bg-[#12122a] p-2.5 overflow-hidden">
+      {/* Header row: reason badge + waiting time */}
+      <div className="flex items-center gap-1.5 mb-1">
         <span
-          className="text-[8px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded"
+          className="text-[8px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0"
           style={{ color: reasonColor, backgroundColor: `${reasonColor}15`, border: `1px solid ${reasonColor}25` }}
         >
           {approval.reason}
         </span>
+        {project && (
+          <span className="text-[#445] text-[9px] font-mono min-w-0 truncate">{project}</span>
+        )}
+        <span className="text-[#334] text-[8px] font-mono ml-auto flex-shrink-0">{formatDuration(approval.createdAt)}</span>
       </div>
+      {/* Title: always visible, wraps */}
+      <div
+        className="text-[11px] font-mono font-bold mb-1 break-words overflow-wrap-anywhere"
+        style={{ color: reasonColor, overflowWrap: 'anywhere' }}
+      >
+        {title}
+      </div>
+      {/* Details: full command, scrollable for very long ones */}
       {details && (
-        <div className="text-[10px] font-mono text-[#667] truncate mb-1.5">{details}</div>
-      )}
-      {project && (
-        <div className="text-[9px] font-mono text-[#445] mb-2">{project}</div>
+        <div
+          className="text-[10px] font-mono text-[#667] mb-1.5 leading-relaxed max-h-28 overflow-y-auto rounded bg-[#0a0a1a] p-1.5 border border-[#1a1a2a]"
+          style={{ overflowWrap: 'anywhere', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}
+        >
+          {details}
+        </div>
       )}
       <div className="flex gap-1.5">
         <button
@@ -189,19 +201,26 @@ function HistoryEntry({
 
   return (
     <div
-      className="px-2 py-0.5 hover:bg-[#0e0e1e] cursor-pointer transition-colors"
+      className="px-2 py-0.5 hover:bg-[#0e0e1e] cursor-pointer transition-colors min-w-0"
       onClick={() => setExpanded(!expanded)}
     >
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 min-w-0">
         <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: dotColor }} />
-        <span className="text-[#667] text-[10px] font-mono flex-1 truncate">{title}</span>
-        <span className="text-[#334] text-[9px] font-mono flex-shrink-0">{formatRelativeTime(entry.resolvedAt)}</span>
+        <span className="text-[#667] text-[10px] font-mono min-w-0 truncate">{title}</span>
+        <span className="text-[#334] text-[9px] font-mono flex-shrink-0 ml-auto">{formatRelativeTime(entry.resolvedAt)}</span>
       </div>
       {expanded && (
-        <div className="ml-3 mt-0.5">
-          {details && <div className="text-[#556] text-[9px] font-mono truncate">{details}</div>}
-          {session && <div className="text-[#334] text-[8px] font-mono">{projectName(session.cwd)}</div>}
-          {entry.message && <div className="text-[#445] text-[8px] font-mono italic">{entry.message}</div>}
+        <div className="ml-3 mt-0.5 min-w-0">
+          {details && (
+            <div
+              className="text-[#556] text-[9px] font-mono leading-relaxed whitespace-pre-wrap"
+              style={{ overflowWrap: 'anywhere' }}
+            >
+              {details}
+            </div>
+          )}
+          {session && <div className="text-[#334] text-[8px] font-mono mt-0.5">{projectName(session.cwd)}</div>}
+          {entry.message && <div className="text-[#445] text-[8px] font-mono italic mt-0.5">{entry.message}</div>}
         </div>
       )}
     </div>
@@ -248,8 +267,8 @@ function WorkerItem({
       style={{ borderLeft: `2px solid ${stateColor}` }}
       onClick={onToggle}
     >
-      <div className="px-2.5 py-1.5">
-        <div className="flex items-center gap-1.5">
+      <div className="px-2.5 py-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={`text-[11px] font-mono flex-shrink-0 leading-none ${
               !isIdle && !isWaiting ? 'animate-pulse' : ''
@@ -259,10 +278,15 @@ function WorkerItem({
           >
             {stateIcon}
           </span>
-          <span className="text-[#99a] text-[11px] font-mono font-bold flex-1 truncate">{displayName}</span>
+          <span className="text-[#99a] text-[11px] font-mono font-bold min-w-0 truncate">{displayName}</span>
           {pendingApprovals.length > 0 && (
             <span className="bg-[#bf8b4a] text-[#0e0e1e] text-[8px] font-mono font-bold rounded-full w-4 h-4 flex items-center justify-center animate-pulse flex-shrink-0">
               {pendingApprovals.length}
+            </span>
+          )}
+          {session.recentTools.length > 0 && (
+            <span className="text-[#2a2a3a] text-[9px] font-mono flex-shrink-0">
+              {session.recentTools.length}
             </span>
           )}
           <span className="text-[#2a2a3a] text-[10px] font-mono flex-shrink-0">
@@ -281,11 +305,11 @@ function WorkerItem({
         </div>
 
         {focus && (
-          <div className="text-[#8899aa] text-[10px] font-mono mt-0.5 ml-4 leading-relaxed truncate">{focus}</div>
+          <div className="text-[#8899aa] text-[10px] font-mono mt-0.5 ml-4 leading-relaxed min-w-0" style={{ overflowWrap: 'anywhere' }}>{focus}</div>
         )}
 
         {lastTool && !isIdle && (
-          <div className="text-[#3a3a5a] text-[9px] font-mono mt-0.5 ml-4 truncate">{lastTool.summary}</div>
+          <div className="text-[#3a3a5a] text-[9px] font-mono mt-0.5 ml-4 min-w-0" style={{ overflowWrap: 'anywhere' }}>{lastTool.summary}</div>
         )}
 
         {!focus && isIdle && !isGhost && (
@@ -330,7 +354,7 @@ function WorkerItem({
             {session.recentTools.length > 1 && (
               <div className="mb-1.5 ml-1">
                 {session.recentTools.slice(-4, -1).reverse().map((t, i) => (
-                  <div key={t.timestamp} className="flex items-start gap-1.5">
+                  <div key={t.timestamp} className="flex items-start gap-1.5 min-w-0">
                     <div className="flex flex-col items-center flex-shrink-0">
                       <div
                         className="w-1 h-1 rounded-full mt-1.5"
@@ -341,8 +365,8 @@ function WorkerItem({
                       )}
                     </div>
                     <div
-                      className="text-[9px] font-mono leading-relaxed truncate"
-                      style={{ color: i === 0 ? '#4a4a6a' : '#2a2a4a' }}
+                      className="text-[9px] font-mono leading-relaxed min-w-0"
+                      style={{ color: i === 0 ? '#4a4a6a' : '#2a2a4a', overflowWrap: 'anywhere' }}
                     >
                       {t.summary}
                     </div>
@@ -599,11 +623,11 @@ export default function ItermPanelPage() {
             {activityLog.length > 0 ? (
               <div className="flex flex-col">
                 {activityLog.map((entry, i) => (
-                  <div key={i} className="px-2.5 py-0.5 flex items-start gap-1.5">
+                  <div key={i} className="px-2.5 py-0.5 flex items-start gap-1.5 min-w-0">
                     <span className="text-[#2a2a3a] text-[9px] font-mono flex-shrink-0 w-10">
                       {entry.time ? new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                     </span>
-                    <span className="text-[#445] text-[9px] font-mono truncate">{entry.detail || entry.tool}</span>
+                    <span className="text-[#445] text-[9px] font-mono min-w-0" style={{ overflowWrap: 'anywhere' }}>{entry.detail || entry.tool}</span>
                   </div>
                 ))}
               </div>
