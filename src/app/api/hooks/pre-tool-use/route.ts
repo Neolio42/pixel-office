@@ -15,7 +15,7 @@ import { readTaskFromTranscript, readLatestAssistantMessage } from '@/lib/transc
 /** Action verbs — things Claude says it's DOING. Matches verb roots + suffixes (fixing, edited, etc). */
 const ACTION_RE = /\b(fix|add|remove|delet|creat|updat|build|clean|mak|implement|refactor|debug|check|test|writ|mov|renam|chang|set|configur|deploy|push|install|upgrad|migrat|convert|pars|extract|handl|show|hid|enabl|disabl|run|start|stop|appl|us|open|clos|review|audit|verif|ensur|improv|optimiz|rewrit|redesign|simplif|merg|split|connect|wir|hook|scaffold|setup|integrat|strip|display|render|put|read|edit|search|reload|restart|clear|address|increas|bump|simulat|forc)\w*\b/i;
 
-function extractFocusFromAssistant(text: string): string | null {
+export function extractFocusFromAssistant(text: string): string | null {
   // Split into sentences (by newlines and punctuation), scan first ~8
   const sentences = text.split(/(?<=[.!?\n])\s+/).slice(0, 8);
 
