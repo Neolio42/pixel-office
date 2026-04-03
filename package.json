@@ -25,11 +25,15 @@
     "start": "npx tsx bin.ts",
     "lint": "eslint",
     "setup": "npx tsx scripts/setup.ts",
-    "uninstall": "npx tsx scripts/setup.ts uninstall"
+    "uninstall": "npx tsx scripts/setup.ts uninstall",
+    "test": "vitest run --reporter=verbose"
   },
   "dependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "jsdom": "^29.0.1",
     "next": "16.1.6",
     "node-pty": "^1.2.0-beta.12",
     "react": "19.2.3",
@@ -43,9 +47,11 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
+    "@vitest/ui": "^4.1.2",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.2"
   }
 }
