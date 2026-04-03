@@ -10,7 +10,7 @@ vi.mock('@/hooks/useRecentCwds', () => ({
   useRecentCwds: () => ({ recents: ['/project/a', '/project/b'], saveRecent: vi.fn() }),
 }));
 
-vi.mock('./Terminal', () => ({
+vi.mock('@/components/Terminal', () => ({
   Terminal: ({ ptyId }: { ptyId: string }) => {
     return <div data-testid={`terminal-${ptyId}`}>Terminal: {ptyId}</div>;
   },

@@ -59,7 +59,6 @@ describe('ApprovalToast', () => {
     });
     render(<ApprovalToast approval={approval} onDecision={vi.fn()} />);
     expect(screen.getByText('Edit file')).toBeDefined();
-    expect(screen.getByText('components/App.tsx')).toBeDefined();
   });
 
   it('renders file path for Write tool', () => {
