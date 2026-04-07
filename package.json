@@ -25,7 +25,8 @@
     "start": "npx tsx bin.ts",
     "lint": "eslint",
     "setup": "npx tsx scripts/setup.ts",
-    "uninstall": "npx tsx scripts/setup.ts uninstall"
+    "uninstall": "npx tsx scripts/setup.ts uninstall",
+    "test": "vitest run"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
