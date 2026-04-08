@@ -24,6 +24,7 @@
     "build": "next build",
     "start": "npx tsx bin.ts",
     "lint": "eslint",
+    "test": "vitest run",
     "setup": "npx tsx scripts/setup.ts",
     "uninstall": "npx tsx scripts/setup.ts uninstall"
   },
@@ -46,6 +47,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }
