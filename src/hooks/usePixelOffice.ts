@@ -108,12 +108,13 @@ export function usePixelOffice(canvasRef: React.RefObject<HTMLCanvasElement | nu
     }
   }, []);
 
-  const sendAlwaysAllow = useCallback((approvalId: string) => {
+  const sendAlwaysAllow = useCallback((approvalId: string, pattern: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       pendingDecisionsRef.current.set(approvalId, 'allow');
       wsRef.current.send(JSON.stringify({
         type: 'always-allow',
         approvalId,
+        pattern,
       }));
     } else {
       console.warn('[WS] Cannot send always-allow — WebSocket not open');

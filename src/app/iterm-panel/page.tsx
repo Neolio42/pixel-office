@@ -83,6 +83,77 @@ function getAlwaysAllowLabel(toolName: string, toolInput: Record<string, unknown
 
 // --- components ---
 
+function GranularityPicker({
+  approval,
+  onPick,
+}: {
+  approval: ApprovalRequest;
+  onPick: (pattern: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const levels = useMemo(() => {
+    if (approval.toolName === 'Bash' || approval.toolName === 'BashOutput') {
+      const cmd = String(approval.toolInput.command || '').trim();
+      const args = cmd.split(/\s+/);
+      const base = (args[0]?.split('/').pop() || args[0] || '').toLowerCase();
+      if (!base) return [];
+
+      const result: Array<{ pattern: string; label: string }> = [];
+      const SUB_TOOLS = new Set(['git', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'docker', 'brew', 'apt', 'pip', 'pip3']);
+
+      if (SUB_TOOLS.has(base) && args[1] && !args[1].startsWith('-')) {
+        const sub = args[1].toLowerCase();
+        if (args[2] && !args[2].startsWith('-')) {
+          result.push({ pattern: `${base} ${sub} ${args[2].toLowerCase()}`, label: `${base} ${sub} ${args[2].toLowerCase()}` });
+        }
+        result.push({ pattern: `${base} ${sub}`, label: `${base} ${sub}` });
+      }
+      result.push({ pattern: base, label: `all ${base}` });
+      return result;
+    }
+    return [{ pattern: approval.toolName, label: approval.toolName }];
+  }, [approval.toolName, approval.toolInput]);
+
+  if (levels.length === 0) return null;
+
+  if (levels.length === 1) {
+    return (
+      <button
+        onClick={() => onPick(levels[0].pattern)}
+        className="w-full mt-1.5 py-0.5 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-[9px] font-mono rounded transition-colors cursor-pointer"
+      >
+        Always allow {levels[0].label}
+      </button>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full mt-1.5 py-0.5 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-[9px] font-mono rounded transition-colors cursor-pointer"
+      >
+        Always allow…
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 flex flex-col gap-0.5">
+      {levels.map(level => (
+        <button
+          key={level.pattern}
+          onClick={() => onPick(level.pattern)}
+          className="w-full py-0.5 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-[9px] font-mono rounded transition-colors cursor-pointer text-left px-2"
+        >
+          {level.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ApprovalCard({
   approval,
   session,
@@ -92,12 +163,13 @@ function ApprovalCard({
   approval: ApprovalRequest;
   session: Session | undefined;
   onDecision: (id: string, decision: 'allow' | 'deny', message?: string) => void;
-  onAlwaysAllow?: (id: string) => void;
+  onAlwaysAllow?: (id: string, pattern: string) => void;
 }) {
+  const [showNote, setShowNote] = useState(false);
+  const [note, setNote] = useState('');
   const { title, details } = formatToolDetails(approval.toolName, approval.toolInput);
   const project = session ? projectName(session.cwd) : null;
   const reasonColor = approval.reason === 'risky' ? '#bf8b4a' : approval.reason === 'unknown' ? '#8b4abf' : '#4abf5c';
-  const alwaysLabel = getAlwaysAllowLabel(approval.toolName, approval.toolInput);
 
   return (
     <div className="rounded-lg border border-[#2a2a4a] bg-[#12122a] p-2.5 overflow-hidden">
@@ -130,9 +202,31 @@ function ApprovalCard({
           {details}
         </div>
       )}
+      {/* Reply with instructions */}
+      {showNote ? (
+        <input
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onDecision(approval.id, 'allow', note);
+            if (e.key === 'Escape') { setShowNote(false); setNote(''); }
+          }}
+          placeholder="Instructions for Claude…"
+          autoFocus
+          className="w-full mb-1.5 px-2 py-1 bg-[#0a0a1a] border border-[#2a2a4a] rounded text-[10px] font-mono text-[#aab] placeholder-[#334] outline-none focus:border-[#4a6a8a]"
+        />
+      ) : (
+        <button
+          onClick={() => setShowNote(true)}
+          className="w-full mb-1.5 py-0.5 text-[#334] hover:text-[#556] text-[8px] font-mono transition-colors cursor-pointer"
+        >
+          + add note
+        </button>
+      )}
       <div className="flex gap-1.5">
         <button
-          onClick={() => onDecision(approval.id, 'allow')}
+          onClick={() => onDecision(approval.id, 'allow', note || undefined)}
           className="flex-1 py-1 bg-[#1a3a2a] hover:bg-[#2a4a3a] text-[#4abf5c] text-[10px] font-mono rounded transition-colors cursor-pointer font-bold"
         >
           Allow
@@ -145,12 +239,10 @@ function ApprovalCard({
         </button>
       </div>
       {onAlwaysAllow && (
-        <button
-          onClick={() => onAlwaysAllow(approval.id)}
-          className="w-full mt-1.5 py-0.5 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-[9px] font-mono rounded transition-colors cursor-pointer"
-        >
-          Always allow {alwaysLabel}
-        </button>
+        <GranularityPicker
+          approval={approval}
+          onPick={(pattern) => onAlwaysAllow(approval.id, pattern)}
+        />
       )}
     </div>
   );
@@ -246,7 +338,7 @@ function WorkerItem({
   onDismiss: () => void;
   pendingApprovals: ApprovalRequest[];
   onDecision: (id: string, decision: 'allow' | 'deny', message?: string) => void;
-  onAlwaysAllow: (id: string) => void;
+  onAlwaysAllow: (id: string, pattern: string) => void;
 }) {
   const isIdle = session.state === 'idle';
   const isWaiting = session.state === 'waiting';
@@ -545,11 +637,20 @@ export default function ItermPanelPage() {
             {sessions.length} worker{sessions.length !== 1 ? 's' : ''}
           </span>
         </div>
-        {approvals.length > 0 && (
-          <span className="ml-auto bg-[#bf8b4a] text-[#0e0e1e] text-[9px] font-mono font-bold rounded-full px-1.5 py-0.5 animate-pulse">
-            {approvals.length}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {approvals.length > 0 && (
+            <span className="bg-[#bf8b4a] text-[#0e0e1e] text-[9px] font-mono font-bold rounded-full px-1.5 py-0.5 animate-pulse">
+              {approvals.length}
+            </span>
+          )}
+          <a
+            href="/iterm-panel/settings"
+            className="text-[#334] hover:text-[#667] text-[11px] font-mono cursor-pointer transition-colors"
+            title="Settings"
+          >
+            ⚙
+          </a>
+        </div>
       </div>
 
       {/* Approvals section */}

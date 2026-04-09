@@ -1,6 +1,6 @@
 import { WorkerState } from './types';
 import { execFileSync } from 'child_process';
-import { isCommandWhitelisted, isToolWhitelisted } from './whitelist';
+import { matchRule, matchToolRule } from './rules';
 
 export type ClassificationReason = 'safe' | 'risky' | 'unknown';
 
@@ -305,9 +305,6 @@ function classifySingleCommand(args: string[]): ClassificationReason {
   // Check safe list
   if (SAFE_COMMANDS.has(base)) return 'safe';
 
-  // Check user whitelist before giving up
-  if (isCommandWhitelisted(args)) return 'safe';
-
   return 'unknown';
 }
 
@@ -353,10 +350,29 @@ const SAFE_MCP_ACTIONS = /(^|_)(get|list|read|find|search|describe|show|view|cou
 const RISKY_MCP_ACTIONS = /(^|_)(delete|remove|drop|destroy|execute|javascript|computer|send|create|update|modify|edit|write|upload|publish|run|invoke|apply|trigger|call|patch|deploy|post|put)(_|$)/;
 
 export function classifyTool(toolName: string, toolInput: Record<string, unknown>): Classification {
-  // Check user whitelist first — overrides all built-in classification
-  if (isToolWhitelisted(toolName)) {
-    const state: WorkerState = toolName.startsWith('mcp__') ? 'reading' : 'typing';
-    return { state, needsApproval: false, reason: 'safe' };
+  // --- User pattern rules (deny > allow > built-in) ---
+
+  // For Bash tools, check command string against rules
+  if (toolName === 'Bash' || toolName === 'BashOutput') {
+    const command = String(toolInput.command || '');
+    const ruleResult = matchRule(command);
+    if (ruleResult === 'allow') {
+      return { state: 'typing', needsApproval: false, reason: 'safe' };
+    }
+    if (ruleResult === 'deny') {
+      return { state: 'waiting', needsApproval: true, reason: 'risky' };
+    }
+    // No rule matched — fall through to built-in classifier below
+  } else {
+    // Non-Bash tools — check tool name against rules
+    const ruleResult = matchToolRule(toolName);
+    if (ruleResult === 'allow') {
+      const state: WorkerState = toolName.startsWith('mcp__') ? 'reading' : 'typing';
+      return { state, needsApproval: false, reason: 'safe' };
+    }
+    if (ruleResult === 'deny') {
+      return { state: 'waiting', needsApproval: true, reason: 'risky' };
+    }
   }
 
   // MCP tools — classify by action pattern instead of blanket approve

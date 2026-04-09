@@ -53,11 +53,12 @@ export function useWorkspace() {
     }
   }, []);
 
-  const sendAlwaysAllow = useCallback((approvalId: string) => {
+  const sendAlwaysAllow = useCallback((approvalId: string, pattern: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'always-allow',
         approvalId,
+        pattern,
       }));
     } else {
       console.warn('[WS] Cannot send always-allow — WebSocket not open');

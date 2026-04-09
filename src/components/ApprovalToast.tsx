@@ -75,7 +75,7 @@ interface Props {
   approval: ApprovalRequest;
   session?: Session;
   onDecision: (approvalId: string, decision: 'allow' | 'deny', message?: string) => void;
-  onAlwaysAllow: (approvalId: string) => void;
+  onAlwaysAllow: (approvalId: string, pattern: string) => void;
 }
 
 export function ApprovalToast({ approval, session, onDecision, onAlwaysAllow }: Props) {
@@ -170,7 +170,7 @@ export function ApprovalToast({ approval, session, onDecision, onAlwaysAllow }: 
           </button>
         </div>
         <button
-          onClick={() => onAlwaysAllow(approval.id)}
+          onClick={() => onAlwaysAllow(approval.id, getAlwaysAllowLabel(approval.toolName, approval.toolInput))}
           className="w-full px-4 py-2 bg-[#1a2a3a] hover:bg-[#2a3a4a] border border-[#2a4a6b] text-[#6aafcf] text-xs font-mono rounded transition-colors cursor-pointer flex items-center justify-center gap-1.5"
         >
           <span>Always Allow</span>

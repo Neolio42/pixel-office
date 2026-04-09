@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFile } from 'child_process';
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json');
 const CLAUDE_DIR = join(homedir(), '.claude');
-const BASE_URL = 'http://localhost:3000/api/hooks';
+const SOCKET_PATH = '/tmp/pixel-office.sock';
 const MARKER = 'pixel-office';
 
 // ---------- Hook registration (inlined from scripts/setup.ts) ----------
@@ -21,11 +21,12 @@ const TTY_PREFIX = [
 const SIMPLE_PREFIX = '[ "$PIXEL_OFFICE_HAIKU" = "1" ] && exit 0; INPUT=$(cat)';
 
 function curlCmd(endpoint: string, maxTime: number, enrichTty: boolean): string {
+  const curlBase = `curl -sf -X POST --unix-socket ${SOCKET_PATH} http://localhost/api/hooks/${endpoint} -H 'Content-Type: application/json'`;
   if (enrichTty) {
     const body = `$(echo "$INPUT" | jq -c --arg tty "$TTY" '. + {tty: $tty}' 2>/dev/null || echo "$INPUT")`;
-    return `${TTY_PREFIX}; curl -sf -X POST ${BASE_URL}/${endpoint} -H 'Content-Type: application/json' -d "${body}" --max-time ${maxTime} 2>/dev/null || true`;
+    return `${TTY_PREFIX}; ${curlBase} -d "${body}" --max-time ${maxTime} 2>/dev/null || true`;
   }
-  return `${SIMPLE_PREFIX}; curl -sf -X POST ${BASE_URL}/${endpoint} -H 'Content-Type: application/json' -d "$INPUT" --max-time ${maxTime} 2>/dev/null || true`;
+  return `${SIMPLE_PREFIX}; ${curlBase} -d "$INPUT" --max-time ${maxTime} 2>/dev/null || true`;
 }
 
 interface HookEntry {
@@ -55,6 +56,49 @@ function hooksRegistered(): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+function hooksNeedUpdate(): boolean {
+  if (!existsSync(SETTINGS_PATH)) return false;
+  try {
+    const settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    const hooks = settings.hooks ?? {};
+    return Object.values(hooks).some((entries) =>
+      (entries as HookEntry[]).some((entry) =>
+        entry.hooks?.some((h) =>
+          typeof h.command === 'string' &&
+          h.command.includes(MARKER) &&
+          h.command.includes('localhost:3000') &&
+          !h.command.includes('--unix-socket')
+        )
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function removeOldHooks(): void {
+  if (!existsSync(SETTINGS_PATH)) return;
+  try {
+    const settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    const hooks = settings.hooks ?? {};
+
+    for (const [event, entries] of Object.entries(hooks)) {
+      hooks[event] = (entries as HookEntry[]).filter((entry) =>
+        !entry.hooks?.some((h) =>
+          typeof h.command === 'string' &&
+          h.command.includes(MARKER) &&
+          h.command.includes('localhost:3000')
+        )
+      );
+    }
+
+    settings.hooks = hooks;
+    writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
+  } catch {
+    return;
   }
 }
 
@@ -99,6 +143,12 @@ async function main(): Promise<void> {
     registerHooks();
     console.log('  ✓ Hooks registered in ~/.claude/settings.json');
     console.log('');
+  } else if (hooksNeedUpdate()) {
+    console.log('  Updating hooks to use Unix socket...');
+    removeOldHooks();
+    registerHooks();
+    console.log('  ✓ Hooks updated in ~/.claude/settings.json');
+    console.log('');
   }
 
   // Start the server
@@ -129,6 +179,22 @@ async function main(): Promise<void> {
     console.log('');
     openBrowser(`http://localhost:${port}`);
   });
+
+  // Unix socket for hooks
+  const hookServer = createServer((req, res) => { handle(req, res); });
+  if (existsSync(SOCKET_PATH)) {
+    try { unlinkSync(SOCKET_PATH); } catch { /* ignore */ }
+  }
+  hookServer.listen(SOCKET_PATH, () => {
+    console.log(`  ✓ Hook socket at ${SOCKET_PATH}`);
+  });
+
+  function cleanup() {
+    try { unlinkSync(SOCKET_PATH); } catch { /* ignore */ }
+    process.exit(0);
+  }
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 }
 
 main().catch((err) => {

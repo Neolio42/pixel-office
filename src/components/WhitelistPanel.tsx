@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
 interface WhitelistRule {
-  type: 'command' | 'tool';
-  entry: string;
+  pattern: string;
+  action: 'allow' | 'deny';
   label: string;
   addedAt: string;
 }
@@ -25,7 +25,7 @@ export function WhitelistPanel({ open, onClose }: { open: boolean; onClose: () =
 
   const fetchRules = useCallback(async () => {
     try {
-      const res = await fetch('/api/whitelist');
+      const res = await fetch('/api/rules');
       const data = await res.json();
       setRules(data.rules || []);
     } catch { /* ignore */ }
@@ -46,11 +46,11 @@ export function WhitelistPanel({ open, onClose }: { open: boolean; onClose: () =
     }
   }, [open, fetchRules, fetchStats]);
 
-  const removeRule = async (type: string, entry: string) => {
-    await fetch('/api/whitelist', {
+  const removeRule = async (pattern: string, action: string) => {
+    await fetch('/api/rules', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, entry }),
+      body: JSON.stringify({ pattern, action }),
     });
     fetchRules();
   };
@@ -70,7 +70,7 @@ export function WhitelistPanel({ open, onClose }: { open: boolean; onClose: () =
               onClick={() => setTab('rules')}
               className={`text-xs font-mono font-bold uppercase tracking-wider cursor-pointer transition-colors ${tab === 'rules' ? 'text-[#6aafcf]' : 'text-[#4a4a6a] hover:text-[#6a6a8a]'}`}
             >
-              Whitelist ({rules.length})
+              Rules ({rules.length})
             </button>
             <button
               onClick={() => { setTab('log'); fetchStats(); }}
@@ -87,23 +87,23 @@ export function WhitelistPanel({ open, onClose }: { open: boolean; onClose: () =
           {tab === 'rules' && (
             rules.length === 0 ? (
               <div className="text-[#4a4a6a] text-xs font-mono text-center py-8">
-                No whitelist rules yet. Click &quot;Always Allow&quot; on an approval toast to add one.
+                No rules yet. Click &quot;Always Allow&quot; on an approval toast to add one.
               </div>
             ) : (
               <div className="space-y-1.5">
                 {rules.map((rule) => (
-                  <div key={`${rule.type}-${rule.entry}`} className="flex items-center justify-between bg-[#0e0e1a] rounded border border-[#2a2a4a] px-3 py-2">
+                  <div key={`${rule.action}-${rule.pattern}`} className="flex items-center justify-between bg-[#0e0e1a] rounded border border-[#2a2a4a] px-3 py-2">
                     <div className="flex items-center gap-2.5">
-                      <span className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${rule.type === 'command' ? 'bg-[#1a2a3a] text-[#6aafcf]' : 'bg-[#2a1a3a] text-[#af6acf]'}`}>
-                        {rule.type}
+                      <span className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${rule.action === 'allow' ? 'bg-[#1a2a3a] text-[#6aafcf]' : 'bg-[#3a1a1a] text-[#e05c5c]'}`}>
+                        {rule.action}
                       </span>
                       <span className="text-[#ccccee] text-xs font-mono font-bold">{rule.label}</span>
-                      {rule.label !== rule.entry && (
-                        <span className="text-[#4a4a6a] text-[10px] font-mono">{rule.entry}</span>
+                      {rule.label !== rule.pattern && (
+                        <span className="text-[#4a4a6a] text-[10px] font-mono">{rule.pattern}</span>
                       )}
                     </div>
                     <button
-                      onClick={() => removeRule(rule.type, rule.entry)}
+                      onClick={() => removeRule(rule.pattern, rule.action)}
                       className="text-[#4a4a6a] hover:text-[#e05c5c] text-xs font-mono cursor-pointer transition-colors px-2"
                     >
                       remove
