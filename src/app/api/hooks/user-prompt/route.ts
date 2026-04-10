@@ -1,21 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, addSession, setSessionFocus, setSessionTask, setNeedsFocusUpdate } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
-import { extractPromptFocus } from '@/lib/text-utils';
+import { extractPromptFocus, parseHookBody } from '@/lib/text-utils';
 
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown>;
-  try {
-    body = await req.json();
-  } catch {
-    try {
-      const raw = await req.text();
-      const sanitized = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
-      body = JSON.parse(sanitized);
-    } catch {
-      body = {};
-    }
-  }
+  const body = parseHookBody(await req.text());
   const sessionId = String(body.session_id || '');
   const prompt = String(body.prompt || '');
   const cwd = String(body.cwd || '');

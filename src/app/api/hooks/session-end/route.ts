@@ -3,20 +3,10 @@ import { getSession, removeSession, updateSession } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 import { unlinkSessionFromPty, getPtyEntry, killPty } from '@/lib/pty-manager';
 import { resolveApproval, getPendingApprovals } from '@/lib/approval-queue';
+import { parseHookBody } from '@/lib/text-utils';
 
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown>;
-  try {
-    body = await req.json();
-  } catch {
-    try {
-      const raw = await req.text();
-      const sanitized = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
-      body = JSON.parse(sanitized);
-    } catch {
-      body = {};
-    }
-  }
+  const body = parseHookBody(await req.text());
   const sessionId = String(body.session_id || '');
   if (!sessionId) return NextResponse.json({});
 

@@ -8,25 +8,35 @@ const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json');
 const CLAUDE_DIR = join(homedir(), '.claude');
 const SOCKET_PATH = '/tmp/pixel-office.sock';
 const MARKER = 'pixel-office';
+// Old hooks used PIXEL_OFFICE_HAIKU (underscores) before the unix-socket migration
+const OLD_MARKER = 'PIXEL_OFFICE_HAIKU';
 
 // ---------- Hook registration (inlined from scripts/setup.ts) ----------
-
-const TTY_PREFIX = [
-  '[ "$PIXEL_OFFICE_HAIKU" = "1" ] && exit 0',
-  'RAW_TTY=$(ps -o tty= -p $PPID 2>/dev/null | tr -d \' \')',
-  '[ -n "$RAW_TTY" ] && [ "$RAW_TTY" != "??" ] && TTY="/dev/$RAW_TTY" || TTY=""',
-  'INPUT=$(cat)',
-].join('; ');
-
-const SIMPLE_PREFIX = '[ "$PIXEL_OFFICE_HAIKU" = "1" ] && exit 0; INPUT=$(cat)';
 
 function curlCmd(endpoint: string, maxTime: number, enrichTty: boolean): string {
   const curlBase = `curl -sf -X POST --unix-socket ${SOCKET_PATH} http://localhost/api/hooks/${endpoint} -H 'Content-Type: application/json'`;
   if (enrichTty) {
-    const body = `$(echo "$INPUT" | jq -c --arg tty "$TTY" '. + {tty: $tty}' 2>/dev/null || echo "$INPUT")`;
-    return `${TTY_PREFIX}; ${curlBase} -d "${body}" --max-time ${maxTime} 2>/dev/null || true`;
+    // Write stdin to tempfile to avoid echo/printf mangling backslash sequences (zsh XSI mode).
+    // jq enriches with tty; falls back to raw file if jq fails (e.g. control chars in bash commands).
+    return [
+      '[ "$PIXEL_OFFICE_HAIKU" = "1" ] && exit 0',
+      'T=$(mktemp)',
+      `RAW_TTY=$(ps -o tty= -p $PPID 2>/dev/null | tr -d ' ')`,
+      `[ -n "$RAW_TTY" ] && [ "$RAW_TTY" != "??" ] && TTY="/dev/$RAW_TTY" || TTY=""`,
+      'cat>"$T"',
+      `(jq -c --arg tty "$TTY" '. + {tty: $tty}' <"$T" 2>/dev/null || cat "$T") | ${curlBase} --data-binary @- --max-time ${maxTime} 2>/dev/null`,
+      'rm -f "$T"',
+      'true',
+    ].join('; ');
   }
-  return `${SIMPLE_PREFIX}; ${curlBase} -d "$INPUT" --max-time ${maxTime} 2>/dev/null || true`;
+  return [
+    '[ "$PIXEL_OFFICE_HAIKU" = "1" ] && exit 0',
+    'T=$(mktemp)',
+    'cat>"$T"',
+    `${curlBase} --data-binary @"$T" --max-time ${maxTime} 2>/dev/null`,
+    'rm -f "$T"',
+    'true',
+  ].join('; ');
 }
 
 interface HookEntry {
@@ -44,6 +54,10 @@ const PIXEL_OFFICE_HOOKS: Record<string, HookEntry> = {
   SessionEnd: { hooks: [{ type: 'command', command: curlCmd('session-end', 5, false), timeout: 5 }] },
 };
 
+function isPixelOfficeHook(command: string): boolean {
+  return command.includes(MARKER) || command.includes(OLD_MARKER);
+}
+
 function hooksRegistered(): boolean {
   if (!existsSync(SETTINGS_PATH)) return false;
   try {
@@ -51,7 +65,7 @@ function hooksRegistered(): boolean {
     const hooks = settings.hooks ?? {};
     return Object.values(hooks).some((entries) =>
       (entries as HookEntry[]).some((entry) =>
-        entry.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
+        entry.hooks?.some((h) => typeof h.command === 'string' && isPixelOfficeHook(h.command))
       )
     );
   } catch {
@@ -68,7 +82,7 @@ function hooksNeedUpdate(): boolean {
       (entries as HookEntry[]).some((entry) =>
         entry.hooks?.some((h) =>
           typeof h.command === 'string' &&
-          h.command.includes(MARKER) &&
+          isPixelOfficeHook(h.command) &&
           h.command.includes('localhost:3000') &&
           !h.command.includes('--unix-socket')
         )
@@ -89,7 +103,7 @@ function removeOldHooks(): void {
       hooks[event] = (entries as HookEntry[]).filter((entry) =>
         !entry.hooks?.some((h) =>
           typeof h.command === 'string' &&
-          h.command.includes(MARKER) &&
+          isPixelOfficeHook(h.command) &&
           h.command.includes('localhost:3000')
         )
       );

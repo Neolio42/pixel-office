@@ -1,3 +1,34 @@
+/**
+ * Parse a Claude Code hook request body, tolerating the malformed JSON that
+ * Claude Code sometimes sends (raw control characters in tool_input strings,
+ * invalid JSON escape sequences like \d or \s from bash regex patterns).
+ *
+ * Three passes:
+ *   1. Standard JSON.parse — fast path for clean payloads.
+ *   2. Escape control characters (newlines/tabs inside string values).
+ *   3. Escape invalid \X sequences (\d, \s, \w, etc.) that aren't valid JSON escapes.
+ */
+export function parseHookBody(raw: string): Record<string, unknown> {
+  try { return JSON.parse(raw); } catch { /* fall through */ }
+
+  // Pass 2: control characters embedded in string values
+  // eslint-disable-next-line no-control-regex
+  const pass2 = raw.replace(/[\x00-\x1f\x7f]/g, (ch) => {
+    if (ch === '\n') return '\\n';
+    if (ch === '\r') return '\\r';
+    if (ch === '\t') return '\\t';
+    return '';
+  });
+  try { return JSON.parse(pass2); } catch { /* fall through */ }
+
+  // Pass 3: invalid JSON escape sequences, e.g. \d \s \w \p from regex in bash commands.
+  // Valid escapes are: \" \\ \/ \b \f \n \r \t \uXXXX — everything else is illegal.
+  const pass3 = pass2.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+  try { return JSON.parse(pass3); } catch { /* fall through */ }
+
+  return {};
+}
+
 /** Action verbs — things Claude says it's DOING or a user asks to be done. Matches verb roots + suffixes. */
 export const ACTION_RE = /\b(fix|add|remove|delet|creat|updat|build|clean|mak|implement|refactor|debug|check|test|writ|mov|renam|chang|set|configur|deploy|push|install|upgrad|migrat|convert|pars|extract|handl|show|hid|enabl|disabl|run|start|stop|appl|us|open|clos|review|audit|verif|ensur|improv|optimiz|rewrit|redesign|simplif|merg|split|connect|wir|hook|scaffold|setup|integrat|strip|display|render|put|read|edit|search|reload|restart|clear|address|increas|bump|simulat|forc|look\s*at|work\s*on|clean\s*up|set\s*up|figure\s*out)\w*\b/i;
 

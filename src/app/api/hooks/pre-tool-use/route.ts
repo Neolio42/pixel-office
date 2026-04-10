@@ -7,29 +7,12 @@ import { broadcast, hasConnectedClients } from '@/lib/ws-server';
 import { readTaskFromTranscript, readLatestAssistantMessage } from '@/lib/transcript';
 import { extractFocusFromAssistant } from '@/lib/text-utils';
 import { logAutoApproved, logBossDecision } from '@/lib/command-log';
+import { parseHookBody } from '@/lib/text-utils';
 
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown>;
-  const raw = await req.text();
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    // Hook payload may contain control characters in tool_input (e.g. tabs in heredocs).
-    // eslint-disable-next-line no-control-regex
-    const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, (ch) => {
-      if (ch === '\n') return '\\n';
-      if (ch === '\r') return '\\r';
-      if (ch === '\t') return '\\t';
-      return '';
-    });
-    try {
-      body = JSON.parse(cleaned);
-    } catch {
-      console.error('[Hook] Unparseable body, first 300 chars:', raw.slice(0, 300));
-      return NextResponse.json({});
-    }
-  }
+  const body = parseHookBody(await req.text());
   const sessionId = String(body.session_id || '');
+  if (!sessionId) return NextResponse.json({});
   const toolName = String(body.tool_name || 'Unknown');
   const toolInput = (body.tool_input || {}) as Record<string, unknown>;
   const cwd = String(body.cwd || '');
