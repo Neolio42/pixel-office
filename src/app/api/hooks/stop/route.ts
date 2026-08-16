@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, addSession, updateSession } from '@/lib/store';
+import { getSession, addSession, markStopped } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 import { parseHookBody } from '@/lib/text-utils';
 
@@ -12,7 +12,8 @@ export async function POST(req: NextRequest) {
     addSession(sessionId, '');
   }
 
-  const session = updateSession(sessionId, 'idle', null);
+  // Promote worker to `done` (state-tracker tick will demote to idle after 60s).
+  const session = markStopped(sessionId);
   if (session) {
     broadcast({ type: 'session-update', session });
   }

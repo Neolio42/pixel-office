@@ -26,6 +26,27 @@ export interface PtyTab {
   exitCode?: number;
 }
 
+async function showLongWaitNotification(sessionId: string, project: string, waitedMs: number) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  try {
+    if (Notification.permission === 'default') {
+      const p = await Notification.requestPermission();
+      if (p !== 'granted') return;
+    }
+    if (Notification.permission !== 'granted') return;
+    const minutes = Math.round(waitedMs / 60_000);
+    const title = project ? `${project} — worker blocked` : 'Worker blocked';
+    const body = `${minutes}m waiting for you. Click to focus.`;
+    const n = new Notification(title, { body, tag: `long-wait-${sessionId}` });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch (err) {
+    console.warn('[Notification] failed:', err);
+  }
+}
+
 export function useWorkspace() {
   const wsRef = useRef<WebSocket | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -184,6 +205,12 @@ export function useWorkspace() {
           }
           case 'notification': {
             console.log(`[Notification] ${msg.sessionId}: ${msg.message}`);
+            break;
+          }
+          case 'long-wait': {
+            // Surface a native browser notification — the worker has been
+            // blocking on user input for >2min and we should look.
+            void showLongWaitNotification(msg.sessionId, msg.project, msg.waitedMs);
             break;
           }
           case 'spawn-result': {

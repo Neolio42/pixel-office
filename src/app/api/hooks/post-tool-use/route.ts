@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, addSession, updateSession, updateSessionCwd } from '@/lib/store';
+import { getSession, addSession, updateSessionCwd, markToolEnded } from '@/lib/store';
 import { broadcast } from '@/lib/ws-server';
 import { parseHookBody } from '@/lib/text-utils';
 
@@ -20,13 +20,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Don't set idle immediately — the next pre-tool-use will come within ms
-  // for rapid tool calls. Instead, just update lastSeen and let the client
-  // handle the idle transition after a timeout.
-  const session = getSession(sessionId);
+  // Stamp the tool-end time. The state-tracker tick will promote this to
+  // `thinking` after ~1.5s of silence, or it'll be replaced by the next
+  // pre-tool-use.
+  const session = markToolEnded(sessionId);
   if (session) {
-    session.lastSeen = Date.now();
-    session.currentTool = null;
     broadcast({ type: 'session-update', session });
   }
 

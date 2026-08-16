@@ -1,4 +1,4 @@
-import { Session, WorkerState } from './types';
+import { Session, WorkerState, STATE_TO_CODE, StateCode } from './types';
 
 const TTY_RE = /^\/dev\/tty[a-zA-Z0-9]+$/;
 
@@ -195,6 +195,94 @@ export function setNeedsFocusUpdate(sessionId: string, value: boolean) {
 }
 export function getNeedsFocusUpdate(sessionId: string): boolean {
   return getFocusUpdateNeeded().get(sessionId) || false;
+}
+
+/** Stamp the time a tool just finished — used to derive `thinking`. */
+export function markToolEnded(sessionId: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.lastToolEndedAt = Date.now();
+  session.lastSeen = Date.now();
+  session.currentTool = null;
+  return session;
+}
+
+/** Move a worker into the `done` state (Stop hook fired). */
+export function markStopped(sessionId: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  const wasWaiting = session.state === 'waiting';
+  session.state = 'done';
+  session.stoppedAt = Date.now();
+  session.lastSeen = Date.now();
+  session.currentTool = null;
+  // Clear awaiting-user when work concludes — but only if we weren't
+  // actively waiting on an approval (that has its own resolution path).
+  if (session.awaitingUserSince && !wasWaiting) {
+    session.awaitingUserSince = undefined;
+    session.longWaitNotified = false;
+  }
+  return session;
+}
+
+/** Mark the moment a worker started needing user input (notification or approval). */
+export function markAwaitingUser(sessionId: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  if (!session.awaitingUserSince) {
+    session.awaitingUserSince = Date.now();
+    session.longWaitNotified = false;
+  }
+  return session;
+}
+
+/** Worker is no longer awaiting input. */
+export function clearAwaitingUser(sessionId: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.awaitingUserSince = undefined;
+  session.longWaitNotified = false;
+  return session;
+}
+
+/** Flip the "we already notified about this long wait" bit. */
+export function markLongWaitNotified(sessionId: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.longWaitNotified = true;
+  return session;
+}
+
+/** Promote a session to `error` with a short hint. */
+export function setSessionError(sessionId: string, hint: string): Session | null {
+  const session = getSessions().get(sessionId);
+  if (!session) return null;
+  session.state = 'error';
+  session.errorHint = hint;
+  session.lastSeen = Date.now();
+  return session;
+}
+
+const HISTORY_INTERVAL_MS = 60_000; // 1 sample / minute
+const HISTORY_MAX = 60;             // 1 hour
+
+/** Sample the worker's current state into the ring buffer if the interval elapsed.
+ *  Returns true if a new sample was pushed (caller should broadcast). */
+export function pushHistorySample(sessionId: string): boolean {
+  const session = getSessions().get(sessionId);
+  if (!session) return false;
+  const now = Date.now();
+  if (session.historyLastSampledAt && now - session.historyLastSampledAt < HISTORY_INTERVAL_MS) {
+    return false;
+  }
+  const code: StateCode = STATE_TO_CODE[session.state] ?? 'i';
+  if (!session.history) session.history = [];
+  session.history.push(code);
+  if (session.history.length > HISTORY_MAX) {
+    session.history = session.history.slice(-HISTORY_MAX);
+  }
+  session.historyLastSampledAt = now;
+  return true;
 }
 
 export function addToolCall(sessionId: string, toolName: string, toolInput: Record<string, unknown>): void {

@@ -14,6 +14,18 @@
 
 export type AnimState = 'idle' | 'typing' | 'reading' | 'waiting' | 'walking';
 
+import type { WorkerState } from '@/lib/types';
+
+/** Map full WorkerState (8 values) to the 5 sprite animations we render. */
+export function toAnimState(state: WorkerState): AnimState {
+  switch (state) {
+    case 'thinking': return 'reading';   // subtle scan-frame animation reads as "pondering"
+    case 'done':     return 'idle';
+    case 'error':    return 'waiting';   // waiting pose conveys "stuck"
+    default:         return state;
+  }
+}
+
 export type FacingDir = 'down' | 'up' | 'right' | 'left';
 
 // Each entry is [frameX in sheet], using row 0 (facing down) for all states

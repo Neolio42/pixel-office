@@ -2,7 +2,7 @@
   "name": "@neolio42/pixel-office",
   "version": "0.1.1",
   "description": "Visualize your Claude Code sessions as pixel art workers in a tiny office",
-  "author": "Nedas Mackevičius",
+  "author": "Nedas Mackevi\u010dius",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,13 +20,13 @@
     "pixel-office": "./bin.sh"
   },
   "scripts": {
-    "dev": "npx tsx server.ts",
-    "build": "next build",
-    "start": "npx tsx bin.ts",
-    "serve": "npm run build && npm start",
+    "dev": "infisical run -- npx tsx server.ts",
+    "build": "infisical run -- next build",
+    "start": "infisical run -- npx tsx bin.ts",
+    "serve": "infisical run -- npm run build && npm start",
     "lint": "eslint",
-    "setup": "npx tsx scripts/setup.ts",
-    "uninstall": "npx tsx scripts/setup.ts uninstall"
+    "setup": "infisical run -- npx tsx scripts/setup.ts",
+    "uninstall": "infisical run -- npx tsx scripts/setup.ts uninstall"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

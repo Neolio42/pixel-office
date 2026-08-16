@@ -2,18 +2,9 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useWorkspace, ApprovalRequest, ResolvedApproval } from '@/hooks/useWorkspace';
-import { STATE_COLORS } from '@/lib/ui-constants';
+import { STATE_COLORS, STATE_ICONS, STATE_LABEL } from '@/lib/ui-constants';
 import { Session } from '@/lib/types';
-
-// --- shared helpers (duplicated from WorkerPanel to keep panel self-contained) ---
-
-const STATE_ICONS: Record<string, string> = {
-  idle: '·',
-  typing: '▌',
-  reading: '◎',
-  waiting: '◈',
-  walking: '→',
-};
+import { WorkerSparkline } from '@/components/WorkerSparkline';
 
 function formatDuration(startedAt: number): string {
   const seconds = Math.floor((Date.now() - startedAt) / 1000);
@@ -342,12 +333,22 @@ function WorkerItem({
 }) {
   const isIdle = session.state === 'idle';
   const isWaiting = session.state === 'waiting';
+  const isThinking = session.state === 'thinking';
+  const isDone = session.state === 'done';
+  const isError = session.state === 'error';
   const hasTty = !!session.tty;
   const project = projectName(session.cwd);
   const displayName = project || session.sessionId.slice(0, 8);
   const isGhost = !session.task && session.recentTools.length === 0 && isIdle;
   const stateColor = isGhost ? '#222' : (STATE_COLORS[session.state] || '#444');
   const stateIcon = STATE_ICONS[session.state] || '·';
+  const stateLabel = STATE_LABEL[session.state] || session.state;
+  // Long-wait visual escalation in the panel itself (in case Notification
+  // permission was denied). The parent ticks once a minute, which re-renders
+  // us; recomputing from session.awaitingUserSince here is fine.
+  // eslint-disable-next-line react-hooks/purity -- Date.now is impure but the parent forces re-renders
+  const longWaitedMs = session.awaitingUserSince ? Date.now() - session.awaitingUserSince : 0;
+  const isLongWait = isWaiting && longWaitedMs > 120_000;
   const focus = session.currentFocus || null;
   const lastTool = session.recentTools[session.recentTools.length - 1];
 
@@ -363,10 +364,10 @@ function WorkerItem({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={`text-[11px] font-mono flex-shrink-0 leading-none ${
-              !isIdle && !isWaiting ? 'animate-pulse' : ''
-            }`}
+              isThinking || session.state === 'typing' || session.state === 'reading' ? 'animate-pulse' : ''
+            } ${isError ? 'animate-bounce' : ''} ${isLongWait ? 'animate-pulse' : ''}`}
             style={{ color: stateColor }}
-            title={session.state}
+            title={stateLabel}
           >
             {stateIcon}
           </span>
@@ -412,11 +413,39 @@ function WorkerItem({
           <div className="text-[#1a1a2a] text-[9px] font-mono mt-0.5 ml-4">No activity</div>
         )}
 
-        {isWaiting && pendingApprovals.length === 0 && (
+        {isThinking && !focus && (
+          <div className="text-[#d6c14a]/70 text-[10px] font-mono mt-0.5 ml-4">Thinking…</div>
+        )}
+
+        {isDone && !focus && (
+          <div className="text-[#5a8a9a] text-[10px] font-mono mt-0.5 ml-4">Finished — walking off</div>
+        )}
+
+        {isError && (
           <div className="ml-4 mt-0.5">
-            <span className="text-[#bf8b4a] text-[9px] font-mono bg-[#bf8b4a]/8 border border-[#bf8b4a]/15 rounded px-1 py-0.5 leading-none">
-              Needs approval
+            <span className="text-[#bf4a4a] text-[9px] font-mono bg-[#bf4a4a]/10 border border-[#bf4a4a]/25 rounded px-1 py-0.5 leading-none">
+              {session.errorHint || 'Error detected'}
             </span>
+          </div>
+        )}
+
+        {isWaiting && pendingApprovals.length === 0 && (
+          <div className="ml-4 mt-0.5 flex items-center gap-1.5">
+            <span
+              className={`text-[9px] font-mono rounded px-1 py-0.5 leading-none ${
+                isLongWait
+                  ? 'text-[#bf4a4a] bg-[#bf4a4a]/10 border border-[#bf4a4a]/30'
+                  : 'text-[#bf8b4a] bg-[#bf8b4a]/8 border border-[#bf8b4a]/15'
+              }`}
+            >
+              {isLongWait ? `Blocked ${Math.round(longWaitedMs / 60000)}m` : 'Needs approval'}
+            </span>
+          </div>
+        )}
+
+        {session.history && session.history.length > 1 && (
+          <div className="mt-1 ml-4">
+            <WorkerSparkline history={session.history} />
           </div>
         )}
       </div>

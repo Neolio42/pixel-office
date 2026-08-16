@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
-import { getSession, addSession, updateSession, updateSessionTty, updateSessionCwd, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus, getNeedsFocusUpdate, setNeedsFocusUpdate } from '@/lib/store';
+import { getSession, addSession, updateSession, updateSessionTty, updateSessionCwd, addToolCall, setSessionPlanMode, setSessionTask, setSessionFocus, getNeedsFocusUpdate, setNeedsFocusUpdate, markAwaitingUser, clearAwaitingUser } from '@/lib/store';
 import { classifyTool } from '@/lib/tool-classifier';
 import { createApproval, resolveApproval } from '@/lib/approval-queue';
 import { broadcast, hasConnectedClients } from '@/lib/ws-server';
@@ -96,6 +96,7 @@ export async function POST(req: NextRequest) {
   // Update worker state
   const session = updateSession(sessionId, state, toolName);
   if (session) {
+    if (state === 'waiting') markAwaitingUser(sessionId);
     broadcast({ type: 'session-update', session });
   }
 
@@ -150,6 +151,8 @@ export async function POST(req: NextRequest) {
   });
   const result = await Promise.race([promise, orphanCheck]);
   clearInterval(orphanInterval!);
+  // Approval resolved (one way or another) — stop the long-wait countdown.
+  clearAwaitingUser(sessionId);
   console.log(`[Hook] Decision for ${toolName}: ${result.decision}${result.message ? ` — "${result.message}"` : ''}`);
   logBossDecision(sessionId, toolName, toolInput, reason, result.decision === 'allow' ? 'allowed' : 'denied');
 

@@ -1,5 +1,5 @@
 import { WorkerState } from '@/lib/types';
-import { type FacingDir, FRAME_COUNTS, FRAME_DURATIONS, AnimState } from './sprites';
+import { type FacingDir, FRAME_COUNTS, FRAME_DURATIONS, AnimState, toAnimState } from './sprites';
 import { DESK_POSITIONS, DOOR_X, DOOR_Y, TILE_SIZE, SCALE } from './office-layout';
 
 export type EmoteType = 'approved' | 'denied' | 'error' | 'done';
@@ -194,7 +194,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
   if (worker.arrived) {
     // In meeting room: stay there regardless of state changes (plan mode controls exit)
     if (worker.inMeetingRoom) {
-      const animState: AnimState = state === 'walking' ? 'walking' : state;
+      const animState: AnimState = toAnimState(state);
       if (animState !== worker.state && worker.state !== 'walking') {
         worker.state = animState;
         worker.frameIndex = 0;
@@ -205,7 +205,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
 
     // Manual target active — update animation but skip location redirects
     if (worker.manualTarget) {
-      const animState: AnimState = state === 'walking' ? 'walking' : state;
+      const animState: AnimState = toAnimState(state);
       if (animState !== worker.state && worker.state !== 'walking') {
         worker.state = animState;
         worker.frameIndex = 0;
@@ -214,7 +214,10 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       return;
     }
 
-    if (state === 'idle' && !worker.inBreakRoom && !worker.manualTarget) {
+    // Treat "done" like idle for routing — worker has finished, can wander.
+    const routingState: WorkerState = state === 'done' ? 'idle' : state;
+
+    if (routingState === 'idle' && !worker.inBreakRoom && !worker.manualTarget) {
       // Go to break room — pick a spot based on desk index
       const spot = BREAK_ROOM_SPOTS[worker.deskIndex % BREAK_ROOM_SPOTS.length];
       worker.targetX = spot.x;
@@ -225,7 +228,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
       return;
     }
 
-    if (state !== 'idle' && worker.inBreakRoom) {
+    if (routingState !== 'idle' && worker.inBreakRoom) {
       // Back to work — return to desk
       const desk = DESK_POSITIONS[worker.deskIndex] || DESK_POSITIONS[0];
       worker.targetX = desk.chairX;
@@ -236,7 +239,7 @@ export function setWorkerState(worker: WorkerEntity, state: WorkerState) {
     }
 
     // Normal state change at desk
-    const animState: AnimState = state === 'walking' ? 'walking' : state;
+    const animState: AnimState = toAnimState(state);
     if (animState !== worker.state) {
       worker.state = animState;
       worker.frameIndex = 0;

@@ -4,6 +4,7 @@ import { existsSync, unlinkSync } from 'fs';
 import next from 'next';
 import { initWSS } from './src/lib/ws-server';
 import { startStaleSessionCleanup } from './src/lib/cleanup';
+import { startStateTracker } from './src/lib/state-tracker';
 
 const dev = process.env.NODE_ENV !== 'production';
 const SOCKET_PATH = process.env.PIXEL_OFFICE_SOCKET || '/tmp/pixel-office.sock';
@@ -28,6 +29,7 @@ app.prepare().then(() => {
 
   initWSS(server);
   startStaleSessionCleanup();
+  startStateTracker();
 
   // TCP listener for browser (iTerm panel, canvas UI)
   server.listen(port, '127.0.0.1', () => {
