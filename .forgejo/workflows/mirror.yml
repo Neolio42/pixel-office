@@ -1,0 +1,20 @@
+# Forgejo reserves GITHUB_* secret names, hence MIRROR_TOKEN.
+# main + tags → GitHub after each push to main (D1: no --mirror, no force, so Codex Cloud branches survive).
+name: mirror
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  workflow_dispatch:
+jobs:
+  github:
+    runs-on: box-linux
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: push main + tags
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "MIRROR_TOKEN not set; skipping"; exit 0; fi
+          git push "https://x-access-token:${TOKEN}@github.com/Neolio42/pixel-office.git" HEAD:refs/heads/main --tags
